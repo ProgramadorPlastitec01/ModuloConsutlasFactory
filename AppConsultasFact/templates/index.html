@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block title %}Inicio — Consultas Fact{% endblock %}
+
+{% block breadcrumb %}<b>Inicio</b>{% endblock %}
+{% block page_title %}Panel de consultas{% endblock %}
+{% block page_desc %}<p>Bienvenido, {{ session.usuario }}. Selecciona un módulo para comenzar.</p>{% endblock %}
+
+{% block content %}
+    <div class="row2">
+        {% call ui.card('Cálculo de desperdicio', 'Consulta órdenes y calcula el desperdicio por producto y periodo') %}
+            <p style="font-size:13px;color:var(--texto-2);margin-bottom:16px;">
+                Filtra por producto y rango de fechas o por número de OP, y analiza los
+                resultados con tablas y gráficos.
+            </p>
+            {{ ui.btn('Abrir módulo', href=url_for('ordenes_produccion'), ico='ordenes') }}
+        {% endcall %}
+
+        {% if session.rol == 'admin' %}
+        {% call ui.card('Salud del sistema', 'Verifica la conexión con la base de datos') %}
+            <p style="font-size:13px;color:var(--texto-2);margin-bottom:16px;">
+                Comprueba el estado de la conexión a SQL Server y el driver configurado.
+            </p>
+            {{ ui.btn('Ver estado', href='/health', variante='ghost', ico='salud') }}
+        {% endcall %}
+        {% endif %}
+    </div>
+
+    {% if session.rol == 'admin' %}
+    {% call ui.card('Administración', 'Gestión de acceso al sistema') %}
+        <p style="font-size:13px;color:var(--texto-2);margin-bottom:16px;">
+            Crea, revisa y elimina usuarios y sus roles.
+        </p>
+        {{ ui.btn('Gestionar usuarios', href=url_for('admin_usuarios'), variante='ghost', ico='usuarios') }}
+    {% endcall %}
+    {% endif %}
+{% endblock %}

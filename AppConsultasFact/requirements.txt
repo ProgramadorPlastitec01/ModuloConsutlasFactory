@@ -1,0 +1,12 @@
+flask
+pyodbc
+python-dotenv
+openpyxl
+portalocker
+# Cifrado de la relación producto->cliente(s) (clientes.dat) con Fernet. La
+# clave se lee de CLIENTES_KEY (.env); ver .env.example para generarla.
+cryptography==48.0.0
+# Reporte PDF del "Cálculo de desperdicio" (generado en servidor). Se eligió
+# ReportLab sobre WeasyPrint por ser Python puro: instala con pip sin librerías
+# del sistema (Pango/Cairo/GDK), lo que lo hace fiable en Rocky Linux y Windows.
+reportlab==5.0.0

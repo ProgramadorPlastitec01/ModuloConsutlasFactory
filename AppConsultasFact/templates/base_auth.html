@@ -1,0 +1,30 @@
+{% import "macros.html" as ui %}
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Consultas Fact{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+<body class="auth">
+
+<div class="auth-wrap">
+    <div class="auth-card">
+        <div class="auth-brand">
+            <div class="logo">F</div>
+            <div>
+                <div class="bt">Consultas Fact</div>
+                <div class="bs">Módulo producción</div>
+            </div>
+        </div>
+
+        {% block auth_content %}{% endblock %}
+    </div>
+</div>
+
+</body>
+</html>

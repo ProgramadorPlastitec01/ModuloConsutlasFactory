@@ -1,0 +1,274 @@
+{
+  "2A03008128": {
+    "nombre": "MANGA/LAY FLAT  120 X 0.32 mm",
+    "clientes": [
+      "BIOGALENIC"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03007392": {
+    "nombre": "MANGA/LAY FLAT 270 X 0.40mm F15320",
+    "clientes": [
+      "BIOGALENIC"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03008451": {
+    "nombre": "MANGA/LAY FLAT 210 X 0.35 mm",
+    "clientes": [
+      "BIOGALENIC"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03007429": {
+    "nombre": "MANGA/LAY FLAT 210 X 0.40mm F15320",
+    "clientes": [
+      "BIOGALENIC"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03008178": {
+    "nombre": "MANGA/LAY FLAT 118 X 0.32 mm",
+    "clientes": [
+      "CCSS"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03009012": {
+    "nombre": "MANGA/LAY FLAT  118 X 0.32 mm",
+    "clientes": [
+      "CCSS"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03009011": {
+    "nombre": "MANGA/LAY FLAT 93 X 0.32 mm",
+    "clientes": [
+      "CCSS"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03009013": {
+    "nombre": "MANGA/LAY FLAT 124 X 0.32mm",
+    "clientes": [
+      "CCSS"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03008816": {
+    "nombre": "MANGA/LAY FLAT  180 X 0.35 mm",
+    "clientes": [
+      "FARACH"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03008806": {
+    "nombre": "MANGA/LAY FLAT  270 X 0.35 mm",
+    "clientes": [
+      "FARACH"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03008771": {
+    "nombre": "MANGA/LAY FLAT  120 X 0.32 mm",
+    "clientes": [
+      "FINLAY"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03003619": {
+    "nombre": "MANGA/LAY FLAT 80 X 0.32mm F15302",
+    "clientes": [
+      "FMCA",
+      "BEKER"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03003624": {
+    "nombre": "MANGA/LAY FLAT 120 X 0.32mm F15302",
+    "clientes": [
+      "FMCA",
+      "BEKER"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03007330": {
+    "nombre": "MANGA/LAY FLAT 270 X 0.35 mm F11727",
+    "clientes": [
+      "FMC-USA"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03008835": {
+    "nombre": "MANGA/LAY FLAT  120 X 0.35 mm",
+    "clientes": [
+      "LIFE"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03008834": {
+    "nombre": "MANGA/LAY FLAT  80 X 0.35 mm",
+    "clientes": [
+      "LIFE"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03008093": {
+    "nombre": "MANGA/LAY FLAT  120 X 0.32 mm",
+    "clientes": [
+      "MEDIFARMA"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03008294": {
+    "nombre": "MANGA/LAY FLAT  215 X 0.35 mm",
+    "clientes": [
+      "MEDIFARMA"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03008224": {
+    "nombre": "MANGA/LAY FLAT 80 X 0.32 mm",
+    "clientes": [
+      "MEDIFARMA"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03008359": {
+    "nombre": "GAINE CLARIMA 1202 120 EP 0.35",
+    "clientes": [
+      "TECHNOFLEX"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03008360": {
+    "nombre": "GAINE CLARIMA 1202 210 EP 0.35 mm",
+    "clientes": [
+      "TECHNOFLEX"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03008358": {
+    "nombre": "GAINE CLARIMA 1202 80 EP 0.32MM",
+    "clientes": [
+      "TECHNOFLEX"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03008833": {
+    "nombre": "MANGA/LAY FLAT  210 X 0.35 mm",
+    "clientes": [
+      "TECSOLPAR"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03008226": {
+    "nombre": "MANGA/LAY FLAT 124 X 0.32mm",
+    "clientes": [
+      "JP"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03008832": {
+    "nombre": "MANGA/LAY FLAT  120 X 0.32 mm",
+    "clientes": [
+      "VARIOS MUESTRAS"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03008869": {
+    "nombre": "MANGA/LAY FLAT FROST 270 X 0.27 mm",
+    "clientes": [
+      "EUROAGRO"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03005781": {
+    "nombre": "MANGA BICAPA EVA-EVA 180 X 0.35 mm",
+    "clientes": [
+      "EVA"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03005782": {
+    "nombre": "MANGA BICAPA EVA-EVA 210 X 0.35 mm",
+    "clientes": [
+      "EVA"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03005780": {
+    "nombre": "MANGA BICAPA EVA-EVA  120 X 0.35 mm",
+    "clientes": [
+      "EVA"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03003667": {
+    "nombre": "MANGA/LAY FLAT 180 X 0.35 mm F15302",
+    "clientes": [
+      "ERMA",
+      "FARVET"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03003668": {
+    "nombre": "MANGA/LAY FLAT 215 X 0.35mm F15302",
+    "clientes": [
+      "MEDIFARMA",
+      "QUIBI"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03008713": {
+    "nombre": "MANGA BICAPA 137 X 0.32 mm",
+    "clientes": [
+      "GOTHAPLAST"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03006708": {
+    "nombre": "MANGA BICAPA EVA-EVA 90 X 0.35 mm",
+    "clientes": [
+      "EVA"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03008803": {
+    "nombre": "MANGA/LAY FLAT  80 X 0.32 mm",
+    "clientes": [
+      "VARIOS MUESTRAS"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03008139": {
+    "nombre": "MANGA/LAY FLAT  180 X 0.35 mm",
+    "clientes": [
+      "JP",
+      "PHARMATECH"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03008334": {
+    "nombre": "MANGA/LAY FLAT  270 X 0.35 mm",
+    "clientes": [
+      "JP"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03008770": {
+    "nombre": "MANGA/LAY FLAT  80 X 0.32 mm",
+    "clientes": [
+      "FINLAY"
+    ],
+    "tamano_bolsa": null
+  },
+  "2A03003970": {
+    "nombre": "MANGA/LAY FLAT 210 X 0.35 mm F15302",
+    "clientes": [
+      "JP",
+      "SANDERSON"
+    ],
+    "tamano_bolsa": null
+  }
+}

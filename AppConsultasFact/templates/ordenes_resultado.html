@@ -1,0 +1,434 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block title %}Resultados — Cálculo de desperdicio{% endblock %}
+
+{% block breadcrumb %}Cálculo de desperdicio / <b>Resultados de consulta</b>{% endblock %}
+
+{% block topbar_acts %}
+    {{ ui.btn('Nueva consulta', href='/ordenes-produccion', variante='ghost', ico='filtro') }}
+    {% if not error and ordenes|length > 0 %}
+    {# Un solo formulario reenvía el mismo filtro; cada botón elige su destino
+       con formaction (Excel por defecto, PDF con la ruta del reporte). #}
+    <form method="POST" action="/ordenes-produccion/exportar" style="display:inline-flex; gap:8px;">
+        <input type="hidden" name="modo" value="{{ filtro.modo }}">
+        {% if filtro.modo == 'orden' %}
+            {% for o in filtro.ordenes %}<input type="hidden" name="ordenes[]" value="{{ o }}">{% endfor %}
+        {% else %}
+            <input type="hidden" name="cod" value="{{ filtro.cod }}">
+            <input type="hidden" name="fecha_desde" value="{{ filtro.fecha_desde }}">
+            <input type="hidden" name="fecha_hasta" value="{{ filtro.fecha_hasta }}">
+        {% endif %}
+        <button type="submit" class="btn btn-excel">{{ ui.icon('descargar') }}Exportar Excel</button>
+        <button type="submit" class="btn btn-pdf" formaction="/ordenes-produccion/reporte-pdf">{{ ui.icon('documento') }}Descargar PDF</button>
+    </form>
+    {% endif %}
+{% endblock %}
+
+{% block page_title %}Resultados de consulta{% endblock %}
+{% block page_desc %}
+    {% if filtro %}
+    <p>
+        {% if filtro.modo == 'orden' %}
+            Órdenes: {{ filtro.ordenes | join(', ') }}
+        {% else %}
+            Producto {{ filtro.cod }}% · {{ filtro.fecha_desde }} a {{ filtro.fecha_hasta }}
+        {% endif %}
+        {% if not error %} · {{ ordenes|length }} orden(es) encontrada(s){% endif %}
+    </p>
+    {% endif %}
+{% endblock %}
+
+{% block content %}
+    {% if error %}
+        <div class="alert alert-error"><strong>Error:</strong> {{ error }}{% if traceback %}<pre>{{ traceback }}</pre>{% endif %}</div>
+    {% elif ordenes|length == 0 %}
+        {% call ui.card() %}
+            {{ ui.empty_state('Sin resultados',
+                'No se encontraron órdenes con el filtro indicado. Ajusta el producto o el rango de fechas e intenta de nuevo.',
+                'inbox') }}
+        {% endcall %}
+    {% else %}
+
+    {# Contadores del segmento de filtros del tab Resultado. La clasificación es
+       BINARIA: una orden tiene % calculado ("con") o no ("sin cálculo"),
+       cualquiera sea el método (nota o diferencia) o el motivo. Solo se cuenta
+       "con"; "sin cálculo" se deriva como total − con, así la identidad
+       Todas == Con desperdicio + Sin cálculo se cumple por construcción. #}
+    {% set ns = namespace(con=0) %}
+    {% for o in ordenes %}
+        {% if o.desperdicio.porcentaje is not none %}{% set ns.con = ns.con + 1 %}{% endif %}
+    {% endfor %}
+
+    <div class="tabs" id="tabs">
+        <div class="tab active" data-tab="resultado">Resultado</div>
+        <div class="tab" data-tab="analisis">Análisis</div>
+        <div class="tab" data-tab="resumen">Resumen</div>
+    </div>
+
+    {# ============================ RESULTADO ============================ #}
+    <div class="panel active" data-panel="resultado">
+        <div class="fpills" id="filtros">
+            <button type="button" class="fpill active" data-filter="todas">Todas · {{ ordenes|length }}</button>
+            <button type="button" class="fpill" data-filter="con">Con desperdicio · {{ ns.con }}</button>
+            <button type="button" class="fpill" data-filter="sin-calculo">Sin cálculo · {{ ordenes|length - ns.con }}</button>
+        </div>
+
+        <div class="buscador">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+            <input type="text" id="buscar-orden" placeholder="Buscar por OP, código o nombre…" autocomplete="off">
+        </div>
+
+        {% for orden in ordenes %}
+        {% set d = orden.desperdicio %}
+        {# Clasificación binaria: con % calculado o sin cálculo (por cualquier
+           motivo/método). Debe coincidir con los contadores de arriba. #}
+        {% set estado = 'con' if d.porcentaje is not none else 'sin-calculo' %}
+        <section class="orden card" data-estado="{{ estado }}">
+            <div class="card-h">
+                <div>
+                    <span class="op-tag">OP {{ orden.op }}</span>
+                    {% if orden.cabecera and orden.cabecera.NOM %}<span class="op-prod">{{ orden.cabecera.NOM }}</span>{% endif %}
+                </div>
+                <div>
+                    {% if d.porcentaje is not none %}{{ ui.pct_badge(d.porcentaje) }}
+                    {% else %}<span class="badge neutral">Sin %</span>{% endif %}
+                </div>
+            </div>
+
+            <div class="mini-metrics">
+                {% if d.metodo == 'diferencia' %}
+                {# Compuesto 2A02: el desperdicio se calcula por diferencia
+                   (consumido de mezcla 2A01 − entregado), no desde la nota. #}
+                <div class="m"><div class="k">Desperdicio (consumido − entregado)</div><div class="v mono">{{ d.desperdicio_kg if d.desperdicio_kg is not none else '—' }}{% if d.desperdicio_kg is not none %} kg{% endif %}</div></div>
+                <div class="m"><div class="k">Entregado (CANTE) / Consumido (2A01)</div><div class="v mono">{{ d.entregado if d.entregado is not none else '—' }} / {{ d.suma_cant1 if d.suma_cant1 is not none else '—' }}</div></div>
+                <div class="m"><div class="k">% Desperdicio <span class="cell-2">· por diferencia</span></div><div class="v">{% if d.porcentaje is not none %}<span style="color:{{ ui.nivel_color(d.porcentaje)|trim }}">{{ d.porcentaje }}%</span>{% else %}<span class="cell-2" style="font-size:12.5px;font-weight:500;">{{ d.alerta }}</span>{% endif %}</div></div>
+                {% else %}
+                <div class="m"><div class="k">Desperdicio (nota)</div><div class="v mono">{{ d.valor_nota if d.valor_nota is not none else '—' }}{% if d.valor_nota is not none %} kg{% endif %}</div></div>
+                <div class="m"><div class="k">Consumo 2A (Σ CANT1)</div><div class="v mono">{{ d.suma_cant1 if d.suma_cant1 is not none else '—' }}</div></div>
+                <div class="m"><div class="k">% Desperdicio</div><div class="v">{% if d.porcentaje is not none %}<span style="color:{{ ui.nivel_color(d.porcentaje)|trim }}">{{ d.porcentaje }}%</span>{% else %}<span class="cell-2" style="font-size:12.5px;font-weight:500;">{{ d.alerta }}</span>{% endif %}</div></div>
+                {% endif %}
+            </div>
+
+            {% if orden.cabecera %}
+            <div class="sec-label">Cabecera</div>
+            <div class="cabecera-grid">
+                {% for col, val in orden.cabecera.items() %}
+                <div class="campo">
+                    <span class="label">{{ col|label }}</span>
+                    <span class="value">{{ val if val is not none else '—' }}</span>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <div class="sec-label">Detalle · {{ orden.detalle|length }} fila(s)</div>
+            {% if orden.detalle %}
+            <div class="tabla-wrap">
+                <table>
+                    <thead><tr>{% for col in orden.detalle[0].keys() %}<th>{{ col|label }}</th>{% endfor %}</tr></thead>
+                    <tbody>
+                        {% for fila in orden.detalle %}
+                        <tr>{% for val in fila.values() %}<td class="mono">{{ val if val is not none else '—' }}</td>{% endfor %}</tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <p class="muted">Sin detalle para esta orden.</p>
+            {% endif %}
+        </section>
+        {% endfor %}
+
+        <div class="orden-vacio" id="orden-vacio" hidden></div>
+    </div>
+
+    {# ============================ ANÁLISIS ============================ #}
+    <div class="panel" data-panel="analisis">
+        <div class="subtabs" id="sub-analisis">
+            <button type="button" class="subtab active" data-sub="prod">Por producto</button>
+            <button type="button" class="subtab" data-sub="mes">Por mes</button>
+            <button type="button" class="subtab" data-sub="cli">Por cliente</button>
+        </div>
+
+        <p class="note">El % ponderado se calcula solo sobre las órdenes con nota de desperdicio; el consumo de órdenes sin nota no se incluye en el denominador.</p>
+
+        {% set chev %}<span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M9 6l6 6-6 6"/></svg></span>{% endset %}
+
+        <div data-subpanel="prod">
+            {% call ui.card('Desperdicio por producto', '% ponderado = Σ nota / Σ CANT1 × 100 · clic en una fila para ver sus órdenes', pad='0') %}
+                {% if analisis and analisis.por_producto %}
+                <div class="tabla-wrap">
+                    <table class="acordeon">
+                        <thead><tr><th>Producto</th><th class="num">Órdenes</th><th class="num">% Desperdicio</th></tr></thead>
+                        <tbody>
+                            {% for f in analisis.por_producto %}
+                            {% set miembros = [] %}
+                            {% for o in ordenes %}
+                                {% set okey = ((o.cabecera.COD | string | trim) or '—') if (o.cabecera and o.cabecera.COD is not none) else '—' %}
+                                {% if okey == f.id %}{% set _ = miembros.append(o) %}{% endif %}
+                            {% endfor %}
+                            <tr class="acc-row"><td>{{ chev }}{{ f.etiqueta }}</td><td class="num mono">{{ f.n_ordenes }}</td><td class="num">{{ ui.pct_badge(f.porcentaje) }}</td></tr>
+                            <tr class="acc-detail" hidden><td colspan="3">{{ ui.detalle_grupo(miembros) }}</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}{{ ui.empty_state('Sin datos', 'No hay órdenes para agrupar por producto.') }}{% endif %}
+            {% endcall %}
+        </div>
+
+        <div data-subpanel="mes" style="display:none;">
+            {% call ui.card('Desperdicio por mes', 'orden cronológico · clic en una fila para ver sus órdenes', pad='0') %}
+                {% if analisis and analisis.por_mes %}
+                <div class="tabla-wrap">
+                    <table class="acordeon">
+                        <thead><tr><th>Mes</th><th class="num">Órdenes</th><th class="num">% Desperdicio</th></tr></thead>
+                        <tbody>
+                            {% for f in analisis.por_mes %}
+                            {% set miembros = [] %}
+                            {% for o in ordenes %}
+                                {% set okey = o.cabecera.FECHA_I.strftime('%Y-%m') if (o.cabecera and o.cabecera.FECHA_I) else '9999-99' %}
+                                {% if okey == f.id %}{% set _ = miembros.append(o) %}{% endif %}
+                            {% endfor %}
+                            <tr class="acc-row"><td>{{ chev }}{{ f.etiqueta }}</td><td class="num mono">{{ f.n_ordenes }}</td><td class="num">{{ ui.pct_badge(f.porcentaje) }}</td></tr>
+                            <tr class="acc-detail" hidden><td colspan="3">{{ ui.detalle_grupo(miembros) }}</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}{{ ui.empty_state('Sin datos', 'No hay órdenes para agrupar por mes.') }}{% endif %}
+            {% endcall %}
+        </div>
+
+        <div data-subpanel="cli" style="display:none;">
+            {% call ui.card('Desperdicio por cliente', 'clic en una fila para ver sus órdenes', pad='0') %}
+                {% if analisis and analisis.por_cliente.disponible %}
+                <div class="tabla-wrap">
+                    <table class="acordeon">
+                        <thead><tr><th>Cliente</th><th class="num">Órdenes</th><th class="num">% Desperdicio</th></tr></thead>
+                        <tbody>
+                            {% for f in analisis.por_cliente.filas %}
+                            {# Miembros del grupo: el backend anota `grupo_cliente`
+                               en cada orden (relación producto->cliente(s)). #}
+                            {% set miembros = [] %}
+                            {% for o in ordenes %}
+                                {% if o.grupo_cliente == f.id %}{% set _ = miembros.append(o) %}{% endif %}
+                            {% endfor %}
+                            <tr class="acc-row"><td>{{ chev }}{{ f.etiqueta }}</td><td class="num mono">{{ f.n_ordenes }}</td><td class="num">{{ ui.pct_badge(f.porcentaje) }}</td></tr>
+                            <tr class="acc-detail" hidden><td colspan="3">{{ ui.detalle_grupo(miembros) }}</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                {{ ui.empty_state('Pendiente',
+                    analisis.por_cliente.mensaje if analisis else 'Análisis por cliente no disponible.',
+                    'usuario-mas') }}
+                {% endif %}
+            {% endcall %}
+        </div>
+    </div>
+
+    {# ============================ RESUMEN ============================ #}
+    <div class="panel" data-panel="resumen">
+        {% if resumen and resumen.total > 0 %}
+        <div class="kpis">
+            {% call ui.kpi('Órdenes encontradas', resumen.total, ico='lista') %}
+                <span class="chip neutral">{{ analisis.por_producto|length }} producto(s)</span>
+            {% endcall %}
+            {% call ui.kpi('Desperdicio más alto', (resumen.max.porcentaje ~ '%') if resumen.max else '—',
+                           color=ui.nivel_color(resumen.max.porcentaje)|trim if resumen.max else none, ico='sube') %}
+                {% if resumen.max %}<span class="chip up">OP {{ resumen.max.op }}</span>{% else %}<span class="chip neutral">sin % calculado</span>{% endif %}
+            {% endcall %}
+            {% call ui.kpi('Desperdicio más bajo', (resumen.min.porcentaje ~ '%') if resumen.min else '—',
+                           color=ui.nivel_color(resumen.min.porcentaje)|trim if resumen.min else none, ico='baja') %}
+                {% if resumen.min %}<span class="chip down">OP {{ resumen.min.op }}</span>{% else %}<span class="chip neutral">sin % calculado</span>{% endif %}
+            {% endcall %}
+            {% call ui.kpi('Promedio ponderado', (resumen.promedio_ponderado ~ '%') if resumen.promedio_ponderado is not none else '—',
+                           color=ui.nivel_color(resumen.promedio_ponderado)|trim, ico='reloj') %}
+                <span class="chip neutral">sobre volumen total</span>
+            {% endcall %}
+        </div>
+
+        {% set productos = resumen.productos %}
+        {% set total_prod = productos|length %}
+
+        {# --- 4a. Desperdicio por producto: barras horizontales, Top 8 --- #}
+        <div class="rcard">
+            <div class="rcard-h">
+                <div><div class="t">Desperdicio por producto</div><div class="s">vista rápida · % ponderado, mayor a menor{% if total_prod > 8 %} · Top 8{% endif %}</div></div>
+                {% if total_prod > 8 %}<button type="button" class="link" id="ver-mas-bars" data-total="{{ total_prod }}">Ver los {{ total_prod }} en Análisis →</button>{% endif %}
+            </div>
+            {% if productos %}
+            <div class="bars" id="bars">
+                {% for p in productos %}
+                <div class="bar-row{% if loop.index0 >= 8 %} oculto{% endif %}">
+                    <div class="bar-name">{{ p.nom }} <span class="code">{{ p.cod }}</span></div>
+                    <div class="bar-track"><div class="bar-fill {{ p.nivel }}" style="width:{{ p.width }}%"></div></div>
+                    <div class="bar-val {{ p.nivel }}">{{ p.porcentaje }}%</div>
+                </div>
+                {% endfor %}
+            </div>
+            <div class="legendbar">
+                <span><i style="background:var(--verde)"></i>Aceptable (&lt; 10%)</span>
+                <span><i style="background:var(--amber)"></i>Atención (10–15%)</span>
+                <span><i style="background:var(--naranja)"></i>Alto (&gt; 15%)</span>
+            </div>
+            {% else %}
+            {{ ui.empty_state('Sin datos', 'No hay productos con desperdicio calculable para graficar.') }}
+            {% endif %}
+        </div>
+
+        {# --- 4b. Tendencia por producto: tabla con sparklines --- #}
+        <div class="rcard">
+            <div class="rcard-h">
+                <div><div class="t">Tendencia por producto</div><div class="s">evolución del % de desperdicio en el rango consultado</div></div>
+            </div>
+            {% if productos %}
+            <div class="tabla-wrap">
+                <table class="trend-tabla">
+                    <thead><tr><th>Producto</th><th class="num">% actual</th><th class="c">Tendencia</th><th class="num">Dirección</th></tr></thead>
+                    <tbody>
+                        {% for p in productos %}
+                        {% set sp = p.spark %}
+                        <tr>
+                            <td class="prod">{{ p.nom }}<span class="code">{{ p.cod }} · {{ p.n_ordenes }} orden(es)</span></td>
+                            <td class="num"><span class="actual {{ p.nivel }}">{{ p.porcentaje }}%</span></td>
+                            <td class="spark">
+                                <svg width="120" height="30" viewBox="0 0 120 30">
+                                    {% if sp.n >= 2 %}<polyline fill="none" stroke="{{ sp.stroke }}" stroke-width="1.8"{% if sp.estilo == 'punteado' %} stroke-dasharray="3 3"{% endif %} points="{{ sp.puntos }}"/>{% endif %}
+                                    {% if sp.dot %}<circle cx="{{ sp.dot[0] }}" cy="{{ sp.dot[1] }}" r="{{ '2.2' if sp.estilo != 'linea' else '2.6' }}" fill="{{ sp.dot_fill }}"/>{% endif %}
+                                </svg>
+                            </td>
+                            <td class="num">
+                                {% if p.direccion.tipo == 'baja' %}
+                                    <span class="trend baja"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M7 7l10 10M17 17H9m8 0V9"/></svg>Baja</span>
+                                {% elif p.direccion.tipo == 'sube' %}
+                                    <span class="trend sube"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M7 17L17 7M17 7H9M17 7v8"/></svg>Sube</span>
+                                {% elif p.direccion.tipo == 'estable' %}
+                                    <span class="trend estable">Estable</span>
+                                {% else %}
+                                    <span class="trend na">{{ p.direccion.texto }}</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <div class="legendbar">
+                <span><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--verde)" stroke-width="2.5"><path d="M7 7l10 10M17 17H9m8 0V9"/></svg>El desperdicio baja (mejora)</span>
+                <span><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--naranja)" stroke-width="2.5"><path d="M7 17L17 7M17 7H9M17 7v8"/></svg>El desperdicio sube (empeora)</span>
+                <span style="color:var(--texto-3)">La dirección solo se calcula con 3+ órdenes</span>
+            </div>
+            {% else %}
+            {{ ui.empty_state('Sin datos', 'No hay productos con desperdicio calculable para mostrar tendencia.') }}
+            {% endif %}
+        </div>
+
+        <p class="note">El % ponderado se calcula solo sobre las órdenes con nota de desperdicio; el consumo de órdenes sin nota no se incluye en el denominador. Escala de color: verde &lt; 10% · amarillo 10–15% · naranja &gt; 15%. La dirección usa la pendiente de una regresión lineal sobre todos los puntos del producto (no solo el primero vs. el último). Con 1 orden no hay tendencia; con 2 se muestra solo como indicio.</p>
+        {% else %}
+        {% call ui.card() %}{{ ui.empty_state('Sin datos para el resumen', 'La consulta no devolvió órdenes suficientes.') }}{% endcall %}
+        {% endif %}
+    </div>
+
+    {% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if not error and ordenes|length > 0 %}
+<script>
+    // Navegación de pestañas (Resultado / Análisis / Resumen).
+    const tabs = document.getElementById('tabs');
+    tabs.querySelectorAll('.tab').forEach(function (t) {
+        t.addEventListener('click', function () {
+            tabs.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+            document.querySelectorAll('.panel').forEach(x => x.classList.remove('active'));
+            t.classList.add('active');
+            document.querySelector('.panel[data-panel="' + t.dataset.tab + '"]').classList.add('active');
+        });
+    });
+
+    // Subtabs del tab Análisis (por producto / mes / cliente).
+    const subAnalisis = document.getElementById('sub-analisis');
+    subAnalisis.querySelectorAll('.subtab').forEach(function (s) {
+        s.addEventListener('click', function () {
+            subAnalisis.querySelectorAll('.subtab').forEach(x => x.classList.remove('active'));
+            s.classList.add('active');
+            document.querySelectorAll('[data-subpanel]').forEach(x => { x.style.display = 'none'; });
+            document.querySelector('[data-subpanel="' + s.dataset.sub + '"]').style.display = 'block';
+        });
+    });
+
+    // --- Filtro (sub-pestaña) + búsqueda en tiempo real sobre el tab Resultado ---
+    const filtros = document.getElementById('filtros');
+    const secciones = Array.from(document.querySelectorAll('.orden'));
+    const buscar = document.getElementById('buscar-orden');
+    const vacio = document.getElementById('orden-vacio');
+    let filtroActivo = 'todas';
+
+    // Normaliza para búsqueda insensible a mayúsculas y acentos.
+    function normaliza(s) {
+        return (s || '').toString().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+    }
+
+    // Texto buscable de cada tarjeta (se cachea una vez).
+    secciones.forEach(sec => { sec.dataset.texto = normaliza(sec.textContent); });
+
+    // Aplica AMBOS filtros: la sub-pestaña activa y el término de búsqueda.
+    function aplicarFiltros() {
+        const termino = normaliza(buscar.value.trim());
+        let visibles = 0;
+        secciones.forEach(sec => {
+            const pasaFiltro = (filtroActivo === 'todas' || sec.dataset.estado === filtroActivo);
+            const pasaBusqueda = (termino === '' || sec.dataset.texto.indexOf(termino) !== -1);
+            const mostrar = pasaFiltro && pasaBusqueda;
+            sec.style.display = mostrar ? '' : 'none';
+            if (mostrar) visibles++;
+        });
+        if (visibles === 0) {
+            vacio.hidden = false;
+            vacio.innerHTML = buscar.value.trim()
+                ? 'Sin resultados para «<b>' + buscar.value.trim().replace(/</g, '&lt;') + '</b>»'
+                : 'Sin órdenes en esta vista.';
+        } else {
+            vacio.hidden = true;
+        }
+    }
+
+    filtros.querySelectorAll('.fpill').forEach(function (c) {
+        c.addEventListener('click', function () {
+            filtros.querySelectorAll('.fpill').forEach(x => x.classList.remove('active'));
+            c.classList.add('active');
+            filtroActivo = c.dataset.filter;
+            aplicarFiltros();
+        });
+    });
+    buscar.addEventListener('input', aplicarFiltros);
+
+    // --- Acordeón del tab Análisis: desplegar el detalle de cada grupo ---
+    document.querySelectorAll('.acc-row').forEach(function (row) {
+        row.addEventListener('click', function () {
+            const detalle = row.nextElementSibling;
+            if (!detalle || !detalle.classList.contains('acc-detail')) return;
+            const abierto = row.classList.toggle('open');
+            detalle.hidden = !abierto;
+        });
+    });
+
+    // "Ver los N en Análisis →": el ranking completo (tabla con filas
+    // expandibles) vive en la pestaña Análisis. Este enlace lleva allí, a la
+    // sub-vista "Por producto", en lugar de duplicar la lista dentro de Resumen.
+    const verMas = document.getElementById('ver-mas-bars');
+    if (verMas) {
+        verMas.addEventListener('click', function () {
+            const tabAnalisis = tabs.querySelector('.tab[data-tab="analisis"]');
+            const subProd = subAnalisis.querySelector('.subtab[data-sub="prod"]');
+            if (tabAnalisis) tabAnalisis.click();
+            if (subProd) subProd.click();
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        });
+    }
+</script>
+{% endif %}
+{% endblock %}

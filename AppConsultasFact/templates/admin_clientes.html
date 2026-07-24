@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block title %}Clientes — Consultas Fact{% endblock %}
+
+{% block breadcrumb %}Administración / <b>Clientes</b>{% endblock %}
+{% block page_title %}Relación producto → cliente(s){% endblock %}
+{% block page_desc %}<p>Asigna a cada código de producto su(s) cliente(s). Se usa en el análisis “Por cliente” del cálculo de desperdicio. La información se guarda cifrada.</p>{% endblock %}
+
+{% block content %}
+    {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+    {% if mensaje %}<div class="alert alert-success">{{ mensaje }}</div>{% endif %}
+
+    {% call ui.card('Asignaciones registradas', clientes|length ~ ' producto(s)', pad='0') %}
+        {% if clientes %}
+        <div class="tabla-wrap">
+            <table>
+                <thead>
+                    <tr><th>Código</th><th>Nombre</th><th>Cliente(s)</th><th class="num">Acciones</th></tr>
+                </thead>
+                <tbody>
+                    {% for c in clientes %}
+                    <tr>
+                        <td class="mono" style="font-weight:600;">{{ c.cod }}</td>
+                        <td>{{ c.nombre or '—' }}</td>
+                        <td>{% for cl in c.clientes %}<span class="badge neutral">{{ cl }}</span> {% endfor %}</td>
+                        <td class="num">
+                            <button type="button" class="btn btn-ghost btn-editar"
+                                    data-cod="{{ c.cod }}" data-nombre="{{ c.nombre }}"
+                                    data-clientes="{{ c.clientes|join(' + ') }}">Editar</button>
+                            <form method="POST" action="{{ url_for('admin_clientes_eliminar') }}"
+                                  onsubmit="return confirm('¿Quitar la asignación de {{ c.cod }}?');"
+                                  style="display:inline;">
+                                <input type="hidden" name="cod" value="{{ c.cod }}">
+                                {{ ui.btn('Quitar', submit=true, variante='danger') }}
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+            {{ ui.empty_state('Sin asignaciones', 'Todavía no hay productos con cliente(s) asignado(s).', 'clientes') }}
+        {% endif %}
+    {% endcall %}
+
+    <form method="POST" action="{{ url_for('admin_clientes_guardar') }}" id="form-cliente">
+        {% call ui.card('Agregar o editar asignación', 'Si el código ya existe, se actualizan sus datos') %}
+            <div class="form-grid">
+                {{ ui.field('Código de producto (COD)', 'cod', required=true, placeholder='2A03008128') }}
+                {{ ui.field('Nombre del producto', 'nombre', placeholder='MANGA/LAY FLAT 120 X 0.32 mm') }}
+                {{ ui.field('Cliente(s)', 'clientes', required=true, placeholder='FMCA + BEKER',
+                            hint='Uno o varios; separa con + o coma. Se guardan en mayúsculas.') }}
+            </div>
+            <div class="form-actions">
+                {{ ui.btn('Guardar asignación', submit=true, ico='mas') }}
+            </div>
+        {% endcall %}
+    </form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // "Editar": copia la fila al formulario de abajo (upsert por COD) y enfoca.
+    document.querySelectorAll('.btn-editar').forEach(function (b) {
+        b.addEventListener('click', function () {
+            document.getElementById('f-cod').value = b.dataset.cod || '';
+            document.getElementById('f-nombre').value = b.dataset.nombre || '';
+            document.getElementById('f-clientes').value = b.dataset.clientes || '';
+            document.getElementById('form-cliente').scrollIntoView({ behavior: 'smooth' });
+            document.getElementById('f-clientes').focus();
+        });
+    });
+</script>
+{% endblock %}

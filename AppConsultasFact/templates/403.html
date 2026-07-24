@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block title %}Acceso denegado — Consultas Fact{% endblock %}
+
+{% block breadcrumb %}<b>Acceso denegado</b>{% endblock %}
+{% block page_title %}Acceso denegado{% endblock %}
+{% block page_desc %}<p>Error 403 · permisos insuficientes.</p>{% endblock %}
+
+{% block content %}
+    {% call ui.card() %}
+        {{ ui.empty_state(
+            'No tienes permiso para ver esta sección',
+            'Esta área requiere el rol de administrador. Si crees que es un error, contacta a un administrador del sistema.',
+            'escudo') }}
+        <div style="text-align:center;">
+            {{ ui.btn('Volver al inicio', href=url_for('index'), variante='ghost') }}
+        </div>
+    {% endcall %}
+{% endblock %}

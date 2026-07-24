@@ -1,0 +1,65 @@
+{% import "macros.html" as ui %}
+{% set p = request.path %}
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Consultas Fact{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+    {% block head_extra %}{% endblock %}
+</head>
+<body class="app">
+
+<aside class="side">
+    <div class="brand">
+        <div class="logo">F</div>
+        <div>
+            <div class="bt">Consultas Fact</div>
+            <div class="bs">Módulo producción</div>
+        </div>
+    </div>
+
+    <div class="nav-label">Principal</div>
+    <a class="nav-item {{ 'active' if p == '/' }}" href="{{ url_for('index') }}">{{ ui.icon('inicio') }}Inicio</a>
+    <a class="nav-item {{ 'active' if p.startswith('/ordenes-produccion') }}" href="{{ url_for('ordenes_produccion') }}">{{ ui.icon('ordenes') }}Cálculo de desperdicio</a>
+    {% if session.rol == 'admin' %}<a class="nav-item {{ 'active' if p == '/health' }}" href="/health">{{ ui.icon('salud') }}Salud del sistema</a>{% endif %}
+
+    {% if session.rol == 'admin' %}
+    <div class="nav-label">Administración</div>
+    <a class="nav-item {{ 'active' if p.startswith('/admin/usuarios') }}" href="{{ url_for('admin_usuarios') }}">{{ ui.icon('usuarios') }}Usuarios</a>
+    <a class="nav-item {{ 'active' if p.startswith('/admin/clientes') }}" href="{{ url_for('admin_clientes') }}">{{ ui.icon('clientes') }}Clientes</a>
+    {% endif %}
+
+    <div class="foot">
+        <div class="avatar">{{ (session.usuario or '?')[:2]|upper }}</div>
+        <div class="who">
+            <div class="n">{{ session.usuario }}</div>
+            <div class="r">{{ 'Administrador' if session.rol == 'admin' else 'Consulta' }}</div>
+        </div>
+        <a class="logout" href="{{ url_for('logout') }}" title="Cerrar sesión">{{ ui.icon('salir') }}</a>
+    </div>
+</aside>
+
+<div class="main">
+    <div class="topbar">
+        <div class="crumb">{% block breadcrumb %}{% endblock %}</div>
+        <div class="acts">{% block topbar_acts %}{% endblock %}</div>
+    </div>
+
+    <div class="content">
+        <div class="page-head">
+            <h1>{% block page_title %}{% endblock %}</h1>
+            {% block page_desc %}{% endblock %}
+        </div>
+
+        {% block content %}{% endblock %}
+    </div>
+</div>
+
+{% block scripts %}{% endblock %}
+</body>
+</html>

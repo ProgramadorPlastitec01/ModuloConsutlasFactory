@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block title %}Usuarios — Consultas Fact{% endblock %}
+
+{% block breadcrumb %}Administración / <b>Usuarios</b>{% endblock %}
+{% block page_title %}Gestión de usuarios{% endblock %}
+{% block page_desc %}<p>Crea, revisa y elimina las cuentas de acceso al sistema.</p>{% endblock %}
+
+{% block content %}
+    {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+    {% if mensaje %}<div class="alert alert-success">{{ mensaje }}</div>{% endif %}
+
+    {% call ui.card('Usuarios registrados', usuarios|length ~ ' cuenta(s)', pad='0') %}
+        {% if usuarios %}
+        <div class="tabla-wrap">
+            <table>
+                <thead>
+                    <tr><th>Usuario</th><th>Rol</th><th class="num">Acciones</th></tr>
+                </thead>
+                <tbody>
+                    {% for u in usuarios %}
+                    <tr>
+                        <td style="font-weight:600;">{{ u.nombre }}</td>
+                        <td>{{ ui.role_badge(u.rol) }}</td>
+                        <td class="num">
+                            {% if u.nombre == session.usuario %}
+                                <span class="cell-2" style="font-size:12px;">Tú</span>
+                            {% else %}
+                            <form method="POST" action="{{ url_for('admin_usuarios_eliminar') }}"
+                                  onsubmit="return confirm('¿Eliminar al usuario {{ u.nombre }}?');"
+                                  style="display:inline;">
+                                <input type="hidden" name="nombre" value="{{ u.nombre }}">
+                                {{ ui.btn('Eliminar', submit=true, variante='danger') }}
+                            </form>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+            {{ ui.empty_state('Sin usuarios', 'Todavía no hay cuentas registradas en el sistema.', 'usuarios') }}
+        {% endif %}
+    {% endcall %}
+
+    <form method="POST" action="{{ url_for('admin_usuarios_crear') }}">
+        {% call ui.card('Crear usuario', 'El usuario deberá cambiar su contraseña en el primer ingreso') %}
+            <div class="form-grid">
+                {{ ui.field('Usuario', 'nombre', required=true) }}
+                {{ ui.field('Contraseña inicial', 'password', tipo='password', required=true) }}
+                <div class="field">
+                    <label class="field-label" for="f-rol">Rol</label>
+                    <select class="input" id="f-rol" name="rol">
+                        <option value="consulta">consulta</option>
+                        <option value="admin">admin</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-actions">
+                {{ ui.btn('Crear usuario', submit=true, ico='usuario-mas') }}
+            </div>
+        {% endcall %}
+    </form>
+{% endblock %}

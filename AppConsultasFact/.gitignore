@@ -1,0 +1,9 @@
+.env
+usuarios.json
+usuarios.json.lock
+.usuarios_*.tmp
+__pycache__/
+*.pyc
+venv/
+.venv/
+clientes.dat

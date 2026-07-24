@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block title %}Cálculo de desperdicio — Consultas Fact{% endblock %}
+
+{% block breadcrumb %}Cálculo de desperdicio / <b>Filtro de consulta</b>{% endblock %}
+{% block page_title %}Cálculo de desperdicio{% endblock %}
+{% block page_desc %}<p>Filtra por producto y rango de fechas, o por número de orden (OP).</p>{% endblock %}
+
+{% block content %}
+<form id="filtro-form" method="POST" action="/ordenes-produccion/consultar">
+
+    {% call ui.card('Modo de búsqueda') %}
+        <div class="modo-opciones">
+            <label><input type="radio" name="modo" value="producto" checked> Producto (COD + fechas)</label>
+            <label><input type="radio" name="modo" value="orden"> Orden (números de OP)</label>
+        </div>
+    {% endcall %}
+
+    <div id="bloque-producto">
+        {% call ui.card('Producto', 'Prefijo de código y rango de fechas de inicio') %}
+            <div class="form-grid">
+                {{ ui.field('Prefijo de producto (COD)', 'cod', placeholder='2A02',
+                            hint='Prefijos válidos: 2A02, 2A03, 2A04, 2A05, 2A06, 2A10') }}
+                {{ ui.field('Fecha desde', 'fecha_desde', tipo='date') }}
+                {{ ui.field('Fecha hasta', 'fecha_hasta', tipo='date') }}
+            </div>
+        {% endcall %}
+    </div>
+
+    <div id="bloque-orden" style="display:none;">
+        {% call ui.card('Órdenes (OP)', 'Uno o varios números de orden') %}
+            <div id="orden-campos">
+                <div class="campo-orden">
+                    <input class="input" type="number" name="ordenes[]" placeholder="N° de OP" min="1">
+                </div>
+            </div>
+            <div class="form-actions">
+                {{ ui.btn('Agregar OP', variante='ghost', ico='mas') }}
+            </div>
+        {% endcall %}
+    </div>
+
+    <div class="form-actions">
+        {{ ui.btn('Consultar', submit=true, ico='ordenes') }}
+    </div>
+</form>
+
+{# Overlay de carga: bloquea la interacción mientras se procesa la consulta. #}
+<div class="overlay" id="overlay-carga" hidden>
+    <div class="overlay-card" id="overlay-cargando">
+        <div class="spinner"></div>
+        <div class="titulo">Consultando…</div>
+        <div class="sub">Estamos procesando tu consulta. Esto puede tardar unos segundos.</div>
+    </div>
+    <div class="overlay-card" id="overlay-error" hidden>
+        <div class="err-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16h.01"/></svg></div>
+        <div class="titulo">La consulta está tardando demasiado</div>
+        <div class="sub">Inténtalo de nuevo o reduce el rango de fechas.</div>
+        <div class="acciones"><button type="button" class="btn btn-primary" id="overlay-cerrar">Entendido</button></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const radios = document.querySelectorAll('input[name="modo"]');
+    const bloqueProducto = document.getElementById('bloque-producto');
+    const bloqueOrden = document.getElementById('bloque-orden');
+    const ordenCampos = document.getElementById('orden-campos');
+    // El botón "Agregar OP" es el último .btn-ghost dentro del bloque de orden.
+    const btnAgregar = bloqueOrden.querySelector('.btn-ghost');
+
+    // Muestra el bloque del modo activo y deshabilita los inputs del inactivo
+    // para que no se envíen al backend (y no disparen validaciones).
+    function actualizarModo() {
+        const modo = document.querySelector('input[name="modo"]:checked').value;
+        const esProducto = modo === 'producto';
+
+        bloqueProducto.style.display = esProducto ? '' : 'none';
+        bloqueOrden.style.display = esProducto ? 'none' : '';
+
+        bloqueProducto.querySelectorAll('input').forEach(i => i.disabled = !esProducto);
+        bloqueOrden.querySelectorAll('input').forEach(i => i.disabled = esProducto);
+    }
+
+    radios.forEach(r => r.addEventListener('change', actualizarModo));
+
+    // Agregar dinámicamente más campos de OP en el modo Orden.
+    btnAgregar.addEventListener('click', () => {
+        const div = document.createElement('div');
+        div.className = 'campo-orden';
+
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.name = 'ordenes[]';
+        input.placeholder = 'N° de OP';
+        input.min = '1';
+        input.className = 'input';
+
+        const btnQuitar = document.createElement('button');
+        btnQuitar.type = 'button';
+        btnQuitar.className = 'btn btn-icon';
+        btnQuitar.textContent = '−';
+        btnQuitar.addEventListener('click', () => div.remove());
+
+        div.appendChild(input);
+        div.appendChild(btnQuitar);
+        ordenCampos.appendChild(div);
+    });
+
+    // Estado inicial coherente con el radio seleccionado.
+    actualizarModo();
+
+    // --- Overlay de carga + timeout de navegador al ejecutar la consulta ---
+    // Umbral de espera antes de avisar que la consulta tarda demasiado.
+    const TIMEOUT_CONSULTA_MS = 35000;
+
+    const form = document.getElementById('filtro-form');
+    const overlay = document.getElementById('overlay-carga');
+    const cajaCargando = document.getElementById('overlay-cargando');
+    const cajaError = document.getElementById('overlay-error');
+    const btnCerrar = document.getElementById('overlay-cerrar');
+    let timerConsulta = null;
+
+    form.addEventListener('submit', function () {
+        // Mostrar overlay y deshabilitar el botón para impedir doble envío.
+        cajaError.hidden = true;
+        cajaCargando.hidden = false;
+        overlay.hidden = false;
+        const btnEnviar = form.querySelector('button[type="submit"]');
+        if (btnEnviar) btnEnviar.disabled = true;
+
+        // Timeout SOLO del navegador: la consulta puede seguir en el servidor.
+        timerConsulta = setTimeout(function () {
+            cajaCargando.hidden = true;
+            cajaError.hidden = false;
+            if (btnEnviar) btnEnviar.disabled = false;  // permitir reintentar
+        }, TIMEOUT_CONSULTA_MS);
+    });
+
+    btnCerrar.addEventListener('click', function () {
+        if (timerConsulta) clearTimeout(timerConsulta);
+        overlay.hidden = true;
+    });
+
+    // Al volver con el botón "atrás" (bfcache), asegurar que el overlay no quede visible.
+    window.addEventListener('pageshow', function () {
+        overlay.hidden = true;
+        if (timerConsulta) clearTimeout(timerConsulta);
+    });
+</script>
+{% endblock %}

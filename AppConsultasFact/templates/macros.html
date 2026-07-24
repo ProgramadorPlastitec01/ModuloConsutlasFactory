@@ -1,0 +1,126 @@
+{# =========================================================================
+   Sistema de componentes (macros Jinja2). Todas las pantallas se componen de
+   estas piezas para mantener un único lenguaje visual. Puramente presentación.
+   ========================================================================= #}
+
+{# --- Iconos (SVG en línea, trazo currentColor) --- #}
+{% macro icon(nombre) %}
+{%- set paths = {
+  'inicio': '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+  'ordenes': '<path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/>',
+  'salud': '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  'usuarios': '<path d="M16 21v-2a4 4 0 0 0-8 0v2"/><circle cx="12" cy="7" r="4"/>',
+  'clientes': '<path d="M20 7h-4V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><path d="M9 7V5h6v2"/>',
+  'lista': '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+  'sube': '<path d="M3 17l6-6 4 4 8-8"/>',
+  'baja': '<path d="M3 7l6 6 4-4 8 8"/>',
+  'reloj': '<circle cx="12" cy="12" r="9"/><path d="M12 8v4l2 2"/>',
+  'descargar': '<path d="M12 3v12m0 0l-4-4m4 4l4-4"/><path d="M4 21h16"/>',
+  'documento': '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h5"/>',
+  'filtro': '<path d="M3 6h18M6 12h12M10 18h4"/>',
+  'inbox': '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5 5h14l3 7v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1v-6z"/>',
+  'usuario-mas': '<path d="M16 21v-2a4 4 0 0 0-8 0v2"/><circle cx="12" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/>',
+  'salir': '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/>',
+  'mas': '<path d="M12 5v14M5 12h14"/>',
+  'candado': '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  'escudo': '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/>'
+} %}
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor">{{ paths.get(nombre, '')|safe }}</svg>
+{%- endmacro %}
+
+{# --- Botón (sólido primario / ghost outline / danger). Enlace o submit. --- #}
+{% macro btn(texto, href=None, variante='primary', submit=false, ico=None, clases='') %}
+{%- if href -%}
+<a class="btn btn-{{ variante }}{% if clases %} {{ clases }}{% endif %}" href="{{ href }}">{% if ico %}{{ icon(ico) }}{% endif %}{{ texto }}</a>
+{%- else -%}
+<button class="btn btn-{{ variante }}{% if clases %} {{ clases }}{% endif %}" type="{{ 'submit' if submit else 'button' }}">{% if ico %}{{ icon(ico) }}{% endif %}{{ texto }}</button>
+{%- endif -%}
+{% endmacro %}
+
+{# --- Tarjeta con cabecera opcional. Contenido vía {% call %} --- #}
+{% macro card(titulo=None, subtitulo=None, cuerpo=true, pad='17px') %}
+<div class="card">
+    {% if titulo %}<div class="card-h"><div class="t">{{ titulo }}</div>{% if subtitulo %}<div class="s">{{ subtitulo }}</div>{% endif %}</div>{% endif %}
+    {% if cuerpo %}<div class="card-b" style="padding:{{ pad }};">{{ caller() }}</div>{% else %}{{ caller() }}{% endif %}
+</div>
+{% endmacro %}
+
+{# --- KPI. Valor grande tabular; sub (chips/texto) vía {% call %} --- #}
+{% macro kpi(label, valor, color=None, ico=None) %}
+<div class="kpi">
+    <div class="lab">{% if ico %}{{ icon(ico) }}{% endif %}{{ label }}</div>
+    <div class="val"{% if color %} style="color:{{ color }}"{% endif %}>{{ valor }}</div>
+    <div class="sub">{{ caller() if caller else '' }}</div>
+</div>
+{% endmacro %}
+
+{# --- Regla de color del % de desperdicio (única fuente en el frontend) ---
+   < 10% verde (aceptable) · 10–15% amber (atención) · > 15% naranja (alto) #}
+{% macro nivel_pct(v) %}{% if v is none %}{% elif v < 10 %}verde{% elif v <= 15 %}amber{% else %}naranja{% endif %}{% endmacro %}
+
+{# Color de texto legible según el nivel (para cifras sobre fondo claro) #}
+{% macro nivel_color(v) %}
+{%- set n = nivel_pct(v)|trim -%}
+{%- if n == 'verde' %}var(--verde){% elif n == 'amber' %}var(--amber-txt){% elif n == 'naranja' %}var(--naranja-txt){% else %}var(--texto){% endif -%}
+{% endmacro %}
+
+{# --- Badge genérico --- #}
+{% macro badge(texto, clase='neutral') %}<span class="badge {{ clase }}">{{ texto }}</span>{% endmacro %}
+
+{# --- Badge de % de desperdicio: resaltado y coloreado por nivel --- #}
+{% macro pct_badge(valor) %}
+{%- if valor is none -%}
+<span class="badge badge-pct neutral">—</span>
+{%- else -%}
+<span class="badge badge-pct {{ nivel_pct(valor)|trim }}">{{ valor }}%</span>
+{%- endif -%}
+{% endmacro %}
+
+{# --- Badge de rol --- #}
+{% macro role_badge(rol) %}<span class="badge {{ 'role-admin' if rol == 'admin' else 'role-consulta' }}">{{ rol }}</span>{% endmacro %}
+
+{# --- Campo de formulario --- #}
+{% macro field(label, name, tipo='text', valor='', placeholder='', required=false, autofocus=false, hint=None) %}
+<div class="field">
+    <label class="field-label" for="f-{{ name }}">{{ label }}</label>
+    <input class="input" id="f-{{ name }}" type="{{ tipo }}" name="{{ name }}"
+           value="{{ valor }}" placeholder="{{ placeholder }}"
+           {%- if required %} required{% endif %}{% if autofocus %} autofocus{% endif %}>
+    {% if hint %}<span class="field-hint">{{ hint }}</span>{% endif %}
+</div>
+{% endmacro %}
+
+{# --- Estado vacío --- #}
+{% macro empty_state(titulo, texto, ico='inbox') %}
+<div class="empty">
+    {{ icon(ico) }}
+    <div class="et">{{ titulo }}</div>
+    <div class="es">{{ texto }}</div>
+</div>
+{% endmacro %}
+
+{# --- Detalle de un grupo (acordeón del tab Análisis): sub-tabla de órdenes.
+   Reutiliza las órdenes ya cargadas en la página; no consulta el backend. --- #}
+{% macro detalle_grupo(lista) %}
+{% if lista %}
+<div class="acc-inner">
+    <table class="sub">
+        <thead><tr><th>OP</th><th>Producto</th><th>Fecha</th><th class="num">Consumo</th><th class="num">Desperd. (kg)</th><th class="num">%</th></tr></thead>
+        <tbody>
+            {% for o in lista %}
+            <tr>
+                <td class="mono">{{ o.op }}</td>
+                <td>{{ o.cabecera.NOM if (o.cabecera and o.cabecera.NOM) else '—' }}</td>
+                <td class="mono cell-2">{{ o.cabecera.FECHA_I.strftime('%Y-%m-%d') if (o.cabecera and o.cabecera.FECHA_I) else '—' }}</td>
+                <td class="num mono">{{ o.desperdicio.suma_cant1 if o.desperdicio.suma_cant1 is not none else '—' }}</td>
+                <td class="num mono">{{ o.desperdicio.desperdicio_kg if o.desperdicio.desperdicio_kg is not none else '—' }}</td>
+                <td class="num">{% if o.desperdicio.porcentaje is not none %}{{ pct_badge(o.desperdicio.porcentaje) }}{% else %}<span class="cell-2">—</span>{% endif %}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="acc-vacio">Sin órdenes en este grupo.</div>
+{% endif %}
+{% endmacro %}
