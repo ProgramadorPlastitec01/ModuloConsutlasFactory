@@ -59,6 +59,64 @@
         {% if o.desperdicio.porcentaje is not none %}{% set ns.con = ns.con + 1 %}{% endif %}
     {% endfor %}
 
+    {# Barra de filtro GLOBAL: buscador + botón "Filtros" (con badge) + panel
+       expandible de 2 columnas (Cliente/Producto) + chips, por encima de los
+       tabs para dejar claro que aplica a las 3 pestañas (Resultado, Análisis
+       y Resumen), no solo a Resultado. Todo se combina en subsetFiltrado()
+       (texto AND producto-OR AND cliente-OR) y se pasa al MISMO
+       agregar()/aplicarBusqueda() del motor JS — sin tocar backend ni la
+       consulta. Los contadores Todas/Con/Sin cálculo (fpills) son la ÚNICA
+       fuente de verdad para el filtro de estado; el panel NO los duplica. #}
+    <div class="filtro-global">
+        <div class="buscador">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+            <input type="text" id="buscar-orden" placeholder="Buscar por OP, código o nombre…" autocomplete="off">
+        </div>
+
+        <button type="button" class="btn-filtros" id="btn-filtros">
+            {{ ui.icon('filtro') }}Filtros<span class="badge-filtros" id="badge-filtros-activos" style="display:none;">0</span>
+            <svg class="btn-filtros-chevron-icono" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+
+        <div class="fpills" id="filtros">
+            <button type="button" class="fpill active" data-filter="todas" id="fpill-todas">Todas · {{ ordenes|length }}</button>
+            <button type="button" class="fpill" data-filter="con" id="fpill-con">Con desperdicio · {{ ns.con }}</button>
+            <button type="button" class="fpill" data-filter="sin-calculo" id="fpill-sin">Sin cálculo · {{ ordenes|length - ns.con }}</button>
+        </div>
+
+        <span class="filtro-alcance">Filtra Resultado, Análisis y Resumen</span>
+    </div>
+
+    {# Panel expandible: colapsado por defecto (display:none inline, para que
+       no dependa de que el JS corra antes del primer pintado — mismo criterio
+       que ya se corrigió para los desplegables flotantes anteriores). #}
+    <div class="panel-filtros" id="panel-filtros" style="display:none;">
+        {% if analisis and analisis.por_cliente.disponible %}
+        <div class="panel-filtros-col" id="pf-col-cliente">
+            <div class="pf-header">
+                <span class="pf-titulo">{{ ui.icon('clientes') }}Cliente</span>
+                <button type="button" class="pf-limpiar" id="pf-cliente-limpiar">Limpiar</button>
+            </div>
+            <div class="pf-buscar"><input type="text" id="pf-cliente-buscar" placeholder="Buscar cliente…" autocomplete="off"></div>
+            <label class="pf-todos"><input type="checkbox" id="pf-cliente-todos">Seleccionar todos</label>
+            <div class="pf-lista" id="pf-cliente-lista"></div>
+            <button type="button" class="pf-mas" id="pf-cliente-mas" hidden></button>
+        </div>
+        {% endif %}
+        <div class="panel-filtros-col" id="pf-col-producto">
+            <div class="pf-header">
+                <span class="pf-titulo">{{ ui.icon('caja') }}Producto</span>
+                <button type="button" class="pf-limpiar" id="pf-producto-limpiar">Limpiar</button>
+            </div>
+            <div class="pf-buscar"><input type="text" id="pf-producto-buscar" placeholder="Buscar producto…" autocomplete="off"></div>
+            <label class="pf-todos"><input type="checkbox" id="pf-producto-todos">Seleccionar todos</label>
+            <div class="pf-lista" id="pf-producto-lista"></div>
+            <button type="button" class="pf-mas" id="pf-producto-mas" hidden></button>
+        </div>
+    </div>
+
+    <div class="chips-activos" id="chips-activos" hidden></div>
+
     <div class="tabs" id="tabs">
         <div class="tab active" data-tab="resultado">Resultado</div>
         <div class="tab" data-tab="analisis">Análisis</div>
@@ -67,23 +125,13 @@
 
     {# ============================ RESULTADO ============================ #}
     <div class="panel active" data-panel="resultado">
-        <div class="fpills" id="filtros">
-            <button type="button" class="fpill active" data-filter="todas">Todas · {{ ordenes|length }}</button>
-            <button type="button" class="fpill" data-filter="con">Con desperdicio · {{ ns.con }}</button>
-            <button type="button" class="fpill" data-filter="sin-calculo">Sin cálculo · {{ ordenes|length - ns.con }}</button>
-        </div>
-
-        <div class="buscador">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
-            <input type="text" id="buscar-orden" placeholder="Buscar por OP, código o nombre…" autocomplete="off">
-        </div>
 
         {% for orden in ordenes %}
         {% set d = orden.desperdicio %}
         {# Clasificación binaria: con % calculado o sin cálculo (por cualquier
            motivo/método). Debe coincidir con los contadores de arriba. #}
         {% set estado = 'con' if d.porcentaje is not none else 'sin-calculo' %}
-        <section class="orden card" data-estado="{{ estado }}">
+        <section class="orden card" data-estado="{{ estado }}" data-op="{{ orden.op }}">
             <div class="card-h">
                 <div>
                     <span class="op-tag">OP {{ orden.op }}</span>
@@ -96,7 +144,13 @@
             </div>
 
             <div class="mini-metrics">
-                {% if d.metodo == 'diferencia' %}
+                {% if d.metodo == 'kardex' %}
+                {# Farmacéutico 2B/2C: la nota está bloqueada; el % viene de los
+                   movimientos Kardex (filas "DES X"), no de la nota de la OP. #}
+                <div class="m"><div class="k">Desperdicio (Kardex, Σ "DES X")</div><div class="v mono">{{ d.desperdicio_kg if d.desperdicio_kg is not none else '—' }}{% if d.desperdicio_kg is not none and d.unidad %} {{ d.unidad }}{% endif %}</div></div>
+                <div class="m"><div class="k">Consumo (Σ CANT, {{ d.n_filas_des }} fila(s) DES)</div><div class="v mono">{{ d.suma_cant1 if d.suma_cant1 is not none else '—' }}{% if d.suma_cant1 is not none and d.unidad %} {{ d.unidad }}{% endif %}</div></div>
+                <div class="m"><div class="k">% Desperdicio <span class="cell-2">· movimiento Kardex</span></div><div class="v">{% if d.porcentaje is not none %}<span style="color:{{ ui.nivel_color(d.porcentaje)|trim }}">{{ d.porcentaje }}%</span>{% else %}<span class="cell-2" style="font-size:12.5px;font-weight:500;">{{ d.alerta }}</span>{% endif %}</div></div>
+                {% elif d.metodo == 'diferencia' %}
                 {# Compuesto 2A02: el desperdicio se calcula por diferencia
                    (consumido de mezcla 2A01 − entregado), no desde la nota. #}
                 <div class="m"><div class="k">Desperdicio (consumido − entregado)</div><div class="v mono">{{ d.desperdicio_kg if d.desperdicio_kg is not none else '—' }}{% if d.desperdicio_kg is not none %} kg{% endif %}</div></div>
@@ -121,6 +175,44 @@
             </div>
             {% endif %}
 
+            {% if d.metodo == 'kardex' %}
+            {# Farmacéutico 2B/2C: detalle real de Kardex/KardexA/Kardexhi (no
+               op1). Se muestran SOLO las filas de desperdicio (patrón "DES X",
+               normalizado con strip() — igual criterio que
+               _sumar_kardex_farmaceutico); el resto de movimientos Kardex de
+               la OP se ocultan (cambio puramente visual, el cálculo no
+               cambia). La columna "En %" distingue, entre esas filas de
+               desperdicio, cuáles PARSEARON y entraron al número (Sí) de las
+               que tienen el patrón pero no se pudieron parsear (—). #}
+            <div class="sec-label">Detalle Kardex (desperdicio) · {{ orden.detalle_kardex|length }} fila(s)</div>
+            {% if orden.detalle_kardex %}
+            <div class="tabla-wrap">
+                <table>
+                    <thead><tr>
+                        <th>{{ 'OP_OC'|label }}</th><th>{{ 'COD'|label }}</th><th>{{ 'CANT'|label }}</th>
+                        <th>VMP</th><th>{{ 'DOC'|label }}</th><th>{{ 'LOTE'|label }}</th><th>DES</th>
+                        <th class="num">En %</th>
+                    </tr></thead>
+                    <tbody>
+                        {% for fila in orden.detalle_kardex %}
+                        <tr>
+                            <td class="mono">{{ fila.OP_OC if fila.OP_OC is not none else '—' }}</td>
+                            <td class="mono">{{ fila.COD if fila.COD is not none else '—' }}</td>
+                            <td class="mono">{{ fila.CANT if fila.CANT is not none else '—' }}</td>
+                            <td class="mono">{{ fila.VMP if fila.VMP is not none else '—' }}</td>
+                            <td class="mono">{{ fila.DOC if fila.DOC is not none else '—' }}</td>
+                            <td class="mono">{{ fila.LOTE if fila.LOTE is not none else '—' }}</td>
+                            <td class="mono">{{ fila.DES if fila.DES is not none else '—' }}</td>
+                            <td class="num">{% if fila._usada %}<span class="badge lo">Sí</span>{% else %}<span class="cell-2">—</span>{% endif %}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <p class="muted">Sin filas de desperdicio (DES X) en Kardex para esta orden.</p>
+            {% endif %}
+            {% else %}
             <div class="sec-label">Detalle · {{ orden.detalle|length }} fila(s)</div>
             {% if orden.detalle %}
             <div class="tabla-wrap">
@@ -135,6 +227,7 @@
             </div>
             {% else %}
             <p class="muted">Sin detalle para esta orden.</p>
+            {% endif %}
             {% endif %}
         </section>
         {% endfor %}
@@ -156,11 +249,10 @@
 
         <div data-subpanel="prod">
             {% call ui.card('Desperdicio por producto', '% ponderado = Σ nota / Σ CANT1 × 100 · clic en una fila para ver sus órdenes', pad='0') %}
-                {% if analisis and analisis.por_producto %}
-                <div class="tabla-wrap">
+                <div class="tabla-wrap" id="wrap-prod"{% if not (analisis and analisis.por_producto) %} hidden{% endif %}>
                     <table class="acordeon">
                         <thead><tr><th>Producto</th><th class="num">Órdenes</th><th class="num">% Desperdicio</th></tr></thead>
-                        <tbody>
+                        <tbody id="tbody-prod">
                             {% for f in analisis.por_producto %}
                             {% set miembros = [] %}
                             {% for o in ordenes %}
@@ -173,17 +265,16 @@
                         </tbody>
                     </table>
                 </div>
-                {% else %}{{ ui.empty_state('Sin datos', 'No hay órdenes para agrupar por producto.') }}{% endif %}
+                <div id="empty-prod"{% if analisis and analisis.por_producto %} hidden{% endif %}>{{ ui.empty_state('Sin datos', 'No hay órdenes para agrupar por producto.') }}</div>
             {% endcall %}
         </div>
 
         <div data-subpanel="mes" style="display:none;">
             {% call ui.card('Desperdicio por mes', 'orden cronológico · clic en una fila para ver sus órdenes', pad='0') %}
-                {% if analisis and analisis.por_mes %}
-                <div class="tabla-wrap">
+                <div class="tabla-wrap" id="wrap-mes"{% if not (analisis and analisis.por_mes) %} hidden{% endif %}>
                     <table class="acordeon">
                         <thead><tr><th>Mes</th><th class="num">Órdenes</th><th class="num">% Desperdicio</th></tr></thead>
-                        <tbody>
+                        <tbody id="tbody-mes">
                             {% for f in analisis.por_mes %}
                             {% set miembros = [] %}
                             {% for o in ordenes %}
@@ -196,17 +287,17 @@
                         </tbody>
                     </table>
                 </div>
-                {% else %}{{ ui.empty_state('Sin datos', 'No hay órdenes para agrupar por mes.') }}{% endif %}
+                <div id="empty-mes"{% if analisis and analisis.por_mes %} hidden{% endif %}>{{ ui.empty_state('Sin datos', 'No hay órdenes para agrupar por mes.') }}</div>
             {% endcall %}
         </div>
 
         <div data-subpanel="cli" style="display:none;">
             {% call ui.card('Desperdicio por cliente', 'clic en una fila para ver sus órdenes', pad='0') %}
                 {% if analisis and analisis.por_cliente.disponible %}
-                <div class="tabla-wrap">
+                <div class="tabla-wrap" id="wrap-cli"{% if not analisis.por_cliente.filas %} hidden{% endif %}>
                     <table class="acordeon">
                         <thead><tr><th>Cliente</th><th class="num">Órdenes</th><th class="num">% Desperdicio</th></tr></thead>
-                        <tbody>
+                        <tbody id="tbody-cli">
                             {% for f in analisis.por_cliente.filas %}
                             {# Miembros del grupo: el backend anota `grupo_cliente`
                                en cada orden (relación producto->cliente(s)). #}
@@ -220,6 +311,7 @@
                         </tbody>
                     </table>
                 </div>
+                <div id="empty-cli"{% if analisis.por_cliente.filas %} hidden{% endif %}>{{ ui.empty_state('Sin datos', 'No hay órdenes para agrupar por cliente.') }}</div>
                 {% else %}
                 {{ ui.empty_state('Pendiente',
                     analisis.por_cliente.mensaje if analisis else 'Análisis por cliente no disponible.',
@@ -231,21 +323,24 @@
 
     {# ============================ RESUMEN ============================ #}
     <div class="panel" data-panel="resumen">
-        {% if resumen and resumen.total > 0 %}
+        <div id="resumen-vacio"{% if resumen and resumen.total > 0 %} hidden{% endif %}>
+            {% call ui.card() %}{{ ui.empty_state('Sin datos para el resumen', 'La consulta no devolvió órdenes suficientes.') }}{% endcall %}
+        </div>
+        <div id="resumen-contenido"{% if not (resumen and resumen.total > 0) %} hidden{% endif %}>
         <div class="kpis">
-            {% call ui.kpi('Órdenes encontradas', resumen.total, ico='lista') %}
+            {% call ui.kpi('Órdenes encontradas', resumen.total, ico='lista', id='kpi-total') %}
                 <span class="chip neutral">{{ analisis.por_producto|length }} producto(s)</span>
             {% endcall %}
             {% call ui.kpi('Desperdicio más alto', (resumen.max.porcentaje ~ '%') if resumen.max else '—',
-                           color=ui.nivel_color(resumen.max.porcentaje)|trim if resumen.max else none, ico='sube') %}
+                           color=ui.nivel_color(resumen.max.porcentaje)|trim if resumen.max else none, ico='sube', id='kpi-max') %}
                 {% if resumen.max %}<span class="chip up">OP {{ resumen.max.op }}</span>{% else %}<span class="chip neutral">sin % calculado</span>{% endif %}
             {% endcall %}
             {% call ui.kpi('Desperdicio más bajo', (resumen.min.porcentaje ~ '%') if resumen.min else '—',
-                           color=ui.nivel_color(resumen.min.porcentaje)|trim if resumen.min else none, ico='baja') %}
+                           color=ui.nivel_color(resumen.min.porcentaje)|trim if resumen.min else none, ico='baja', id='kpi-min') %}
                 {% if resumen.min %}<span class="chip down">OP {{ resumen.min.op }}</span>{% else %}<span class="chip neutral">sin % calculado</span>{% endif %}
             {% endcall %}
             {% call ui.kpi('Promedio ponderado', (resumen.promedio_ponderado ~ '%') if resumen.promedio_ponderado is not none else '—',
-                           color=ui.nivel_color(resumen.promedio_ponderado)|trim, ico='reloj') %}
+                           color=ui.nivel_color(resumen.promedio_ponderado)|trim, ico='reloj', id='kpi-promedio') %}
                 <span class="chip neutral">sobre volumen total</span>
             {% endcall %}
         </div>
@@ -256,10 +351,10 @@
         {# --- 4a. Desperdicio por producto: barras horizontales, Top 8 --- #}
         <div class="rcard">
             <div class="rcard-h">
-                <div><div class="t">Desperdicio por producto</div><div class="s">vista rápida · % ponderado, mayor a menor{% if total_prod > 8 %} · Top 8{% endif %}</div></div>
-                {% if total_prod > 8 %}<button type="button" class="link" id="ver-mas-bars" data-total="{{ total_prod }}">Ver los {{ total_prod }} en Análisis →</button>{% endif %}
+                <div><div class="t">Desperdicio por producto</div><div class="s" id="bars-subtitulo">vista rápida · % ponderado, mayor a menor{% if total_prod > 8 %} · Top 8{% endif %}</div></div>
+                <button type="button" class="link" id="ver-mas-bars" data-total="{{ total_prod }}"{% if total_prod <= 8 %} hidden{% endif %}>Ver los {{ total_prod }} en Análisis →</button>
             </div>
-            {% if productos %}
+            <div id="wrap-bars"{% if not productos %} hidden{% endif %}>
             <div class="bars" id="bars">
                 {% for p in productos %}
                 <div class="bar-row{% if loop.index0 >= 8 %} oculto{% endif %}">
@@ -274,9 +369,8 @@
                 <span><i style="background:var(--amber)"></i>Atención (10–15%)</span>
                 <span><i style="background:var(--naranja)"></i>Alto (&gt; 15%)</span>
             </div>
-            {% else %}
-            {{ ui.empty_state('Sin datos', 'No hay productos con desperdicio calculable para graficar.') }}
-            {% endif %}
+            </div>
+            <div id="empty-bars"{% if productos %} hidden{% endif %}>{{ ui.empty_state('Sin datos', 'No hay productos con desperdicio calculable para graficar.') }}</div>
         </div>
 
         {# --- 4b. Tendencia por producto: tabla con sparklines --- #}
@@ -284,11 +378,11 @@
             <div class="rcard-h">
                 <div><div class="t">Tendencia por producto</div><div class="s">evolución del % de desperdicio en el rango consultado</div></div>
             </div>
-            {% if productos %}
+            <div id="wrap-trend"{% if not productos %} hidden{% endif %}>
             <div class="tabla-wrap">
                 <table class="trend-tabla">
                     <thead><tr><th>Producto</th><th class="num">% actual</th><th class="c">Tendencia</th><th class="num">Dirección</th></tr></thead>
-                    <tbody>
+                    <tbody id="tbody-trend">
                         {% for p in productos %}
                         {% set sp = p.spark %}
                         <tr>
@@ -321,15 +415,12 @@
                 <span><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--naranja)" stroke-width="2.5"><path d="M7 17L17 7M17 7H9M17 7v8"/></svg>El desperdicio sube (empeora)</span>
                 <span style="color:var(--texto-3)">La dirección solo se calcula con 3+ órdenes</span>
             </div>
-            {% else %}
-            {{ ui.empty_state('Sin datos', 'No hay productos con desperdicio calculable para mostrar tendencia.') }}
-            {% endif %}
+            </div>
+            <div id="empty-trend"{% if productos %} hidden{% endif %}>{{ ui.empty_state('Sin datos', 'No hay productos con desperdicio calculable para mostrar tendencia.') }}</div>
         </div>
 
         <p class="note">El % ponderado se calcula solo sobre las órdenes con nota de desperdicio; el consumo de órdenes sin nota no se incluye en el denominador. Escala de color: verde &lt; 10% · amarillo 10–15% · naranja &gt; 15%. La dirección usa la pendiente de una regresión lineal sobre todos los puntos del producto (no solo el primero vs. el último). Con 1 orden no hay tendencia; con 2 se muestra solo como indicio.</p>
-        {% else %}
-        {% call ui.card() %}{{ ui.empty_state('Sin datos para el resumen', 'La consulta no devolvió órdenes suficientes.') }}{% endcall %}
-        {% endif %}
+        </div>
     </div>
 
     {% endif %}
@@ -338,6 +429,17 @@
 {% block scripts %}
 {% if not error and ordenes|length > 0 %}
 <script>
+    // Dataset por orden para el motor de agregación en cliente (buscador que
+    // re-renderiza Análisis/Resumen sin reconsultar al servidor). Valores YA
+    // calculados por el backend (num_ponderado/den_ponderado/porcentaje de la
+    // regla de cada orden, grupo_cliente Opción B) — ver _ordenes_data_json.
+    const ORDENES_DATA = {{ ordenes_data | tojson }};
+    // El análisis "Por cliente" puede no estar disponible (clientes.dat no
+    // cargó): en ese caso NO se re-renderiza esa sub-tabla al buscar, se deja
+    // el mensaje estático que ya pintó Jinja (los ids tbody-cli/wrap-cli ni
+    // siquiera existen en el DOM en ese caso).
+    const CLIENTE_DISPONIBLE = {{ (analisis.por_cliente.disponible if analisis else false) | tojson }};
+
     // Navegación de pestañas (Resultado / Análisis / Resumen).
     const tabs = document.getElementById('tabs');
     tabs.querySelectorAll('.tab').forEach(function (t) {
@@ -360,40 +462,689 @@
         });
     });
 
-    // --- Filtro (sub-pestaña) + búsqueda en tiempo real sobre el tab Resultado ---
+    // =========================================================================
+    // MOTOR DE AGREGACIÓN EN CLIENTE
+    // Puerto 1:1 de las funciones Python equivalentes en app.py:
+    //   _porcentaje_ponderado, _agrupar_ponderado, _clave_producto, _clave_mes,
+    //   _nivel_desperdicio, _sparkline, _direccion_tendencia, _productos_resumen.
+    // DECISIÓN CLAVE: el motor NUNCA conoce las reglas de cálculo (nota/2A02/
+    // kardex) — cada orden ya llega con num_ponderado/den_ponderado resueltos
+    // por el backend; el motor solo los SUMA por grupo (Σnum/Σden×100), igual
+    // que _agrupar_ponderado. Así "el motor no recalcula nada" se cumple por
+    // construcción: si mañana se agrega una 4ª regla de cálculo (o cambia una
+    // existente), el motor no necesita cambiar — solo debe seguir sumando dos
+    // números por orden. Validado 1:1 contra las funciones reales de app.py
+    // con datasets sintéticos (5 semillas × 149 órdenes, 0 discrepancias).
+    // =========================================================================
+    const NIVEL_HEX = { verde: "#0E9F6E", amber: "#E8A317", naranja: "#F07A1E" };
+    const GRIS_SPARK = "#C7CAD1";
+    const GRIS_SPARK_DOT = "#9296A1";
+    const UMBRAL_PENDIENTE = 0.1;
+    const CHEV = '<span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M9 6l6 6-6 6"/></svg></span>';
+
+    function porcentajePonderado(num, den) {
+        if (den && den > 0) return Math.round((num / den) * 10000) / 100;
+        return null;
+    }
+
+    function nivelDesperdicio(pct) {
+        if (pct === null || pct === undefined) return null;
+        if (pct < 10) return "verde";
+        if (pct <= 15) return "amber";
+        return "naranja";
+    }
+
+    function nivelColorCss(pct) {
+        const n = nivelDesperdicio(pct);
+        if (n === "verde") return "var(--verde)";
+        if (n === "amber") return "var(--amber-txt)";
+        if (n === "naranja") return "var(--naranja-txt)";
+        return "var(--texto)";
+    }
+
+    // Python (Jinja) siempre muestra un float con al menos un decimal
+    // ("10.0", "8.5"); JS descarta el ".0" de los enteros ("10"). Sin esto,
+    // un % que dé exacto (p. ej. 10.0%) se vería distinto entre el render
+    // inicial del servidor y el re-render en vivo del motor JS.
+    function formatoPct(v) {
+        return Number.isInteger(v) ? v.toFixed(1) : String(v);
+    }
+
+    function escapeHtml(s) {
+        if (s === null || s === undefined) return "";
+        return String(s).replace(/[&<>"']/g, c => ({
+            "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+        }[c]));
+    }
+
+    // clave*(orden) -> [idGrupo, etiqueta], igual contrato que las funciones
+    // clave(orden) de Python que recibe _agrupar_ponderado.
+    function claveProducto(o) {
+        const cod = (o.cod || "").toString().trim();
+        const nom = (o.nombre || "").toString().trim();
+        const partes = [cod, nom].filter(Boolean);
+        const etiqueta = partes.length ? partes.join(" — ") : "Sin producto";
+        return [cod || "—", etiqueta];
+    }
+    function claveMes(o) {
+        const mes = o.mes || "9999-99";
+        if (mes === "9999-99") return ["9999-99", "Sin fecha"];
+        return [mes, mes];
+    }
+    function claveCliente(o) {
+        const g = o.grupo_cliente || "Sin cliente asignado";
+        return [g, g];
+    }
+
+    // Núcleo: agrupa órdenes ya calculadas por el backend. Solo suma num/den
+    // de las órdenes con tiene_calculo && den_ponderado>0 (mismo gate que
+    // _agrupar_ponderado); las "sin cálculo" siguen contando en n_ordenes pero
+    // no entran a Σden.
+    function agrupar(ordenes, claveFn) {
+        const grupos = new Map();
+        for (const o of ordenes) {
+            const info = claveFn(o);
+            if (!info) continue;
+            const [gid, etiqueta] = info;
+            let g = grupos.get(gid);
+            if (!g) { g = { id: gid, etiqueta, n_ordenes: 0, num: 0, den: 0 }; grupos.set(gid, g); }
+            g.n_ordenes += 1;
+            if (o.tiene_calculo && o.num_ponderado != null && o.den_ponderado != null
+                && Number(o.den_ponderado) > 0) {
+                g.num += Number(o.num_ponderado);
+                g.den += Number(o.den_ponderado);
+            }
+        }
+        return Array.from(grupos.values()).map(g => ({
+            id: g.id, etiqueta: g.etiqueta, n_ordenes: g.n_ordenes,
+            porcentaje: porcentajePonderado(g.num, g.den),
+        }));
+    }
+
+    // Mismo orden de sort que _analizar_ordenes en app.py.
+    function ordenarPorProducto(filas) {
+        return filas.slice().sort((a, b) => {
+            const an = a.porcentaje === null, bn = b.porcentaje === null;
+            if (an !== bn) return an ? 1 : -1;
+            if (an && bn) return 0;
+            return b.porcentaje - a.porcentaje;
+        });
+    }
+    function ordenarPorMes(filas) {
+        return filas.slice().sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    }
+    function ordenarPorCliente(filas) {
+        return filas.slice().sort((a, b) => {
+            const asin = a.id === "Sin cliente asignado", bsin = b.id === "Sin cliente asignado";
+            if (asin !== bsin) return asin ? 1 : -1;
+            const an = a.porcentaje === null, bn = b.porcentaje === null;
+            if (an !== bn) return an ? 1 : -1;
+            if (an && bn) return 0;
+            return b.porcentaje - a.porcentaje;
+        });
+    }
+
+    // KPIs del tab Resumen: total, con desperdicio, sin cálculo, más alto/bajo
+    // (con su OP) y promedio ponderado global — mismo algoritmo que
+    // _resumen_ordenes.
+    function calcularKPIs(ordenes) {
+        let numTotal = 0, denTotal = 0, maxKpi = null, minKpi = null, con = 0;
+        for (const o of ordenes) {
+            if (o.tiene_calculo) con += 1;
+            if (o.num_ponderado != null && o.den_ponderado != null && Number(o.den_ponderado) > 0) {
+                numTotal += Number(o.num_ponderado);
+                denTotal += Number(o.den_ponderado);
+            }
+            if (o.pct !== null && o.pct !== undefined) {
+                if (maxKpi === null || o.pct > maxKpi.porcentaje) maxKpi = { op: o.op, porcentaje: o.pct };
+                if (minKpi === null || o.pct < minKpi.porcentaje) minKpi = { op: o.op, porcentaje: o.pct };
+            }
+        }
+        return {
+            total: ordenes.length, con, sinCalculo: ordenes.length - con,
+            max: maxKpi, min: minKpi,
+            promedioPonderado: porcentajePonderado(numTotal, denTotal),
+        };
+    }
+
+    // Puerto de _sparkline (app.py): mismo viewBox 120x30 y mismos 3 casos
+    // (0 puntos, 1 punto, 2+ puntos). toFixed(1) iguala el formato de
+    // coordenadas de Python (siempre con un decimal).
+    function sparkline(puntos, nivel) {
+        const n = puntos.length;
+        const x0 = 4.0, x1 = 116.0, yTop = 4.0, yBot = 26.0;
+        if (n === 0) return { n: 0, puntos: "", dot: null, estilo: "solo", stroke: GRIS_SPARK, dotFill: GRIS_SPARK };
+        if (n === 1) return { n: 1, puntos: "", dot: [60.0, 15.0], estilo: "solo", stroke: GRIS_SPARK, dotFill: GRIS_SPARK };
+
+        const mn = Math.min(...puntos), mx = Math.max(...puntos);
+        const coords = puntos.map((p, i) => {
+            const x = x0 + i * (x1 - x0) / (n - 1);
+            const y = mx > mn ? yBot - (p - mn) / (mx - mn) * (yBot - yTop) : 15.0;
+            return [Math.round(x * 10) / 10, Math.round(y * 10) / 10];
+        });
+
+        let estilo, stroke, dotFill;
+        if (n === 2) { estilo = "punteado"; stroke = GRIS_SPARK; dotFill = GRIS_SPARK_DOT; }
+        else { estilo = "linea"; stroke = dotFill = NIVEL_HEX[nivel] || GRIS_SPARK; }
+
+        return {
+            n,
+            puntos: coords.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" "),
+            dot: coords[coords.length - 1],
+            estilo, stroke, dotFill,
+        };
+    }
+
+    // Puerto de _direccion_tendencia (app.py): regresión lineal simple sobre
+    // TODOS los puntos (no solo primero vs. último).
+    function direccionTendencia(puntos) {
+        const n = puntos.length;
+        if (n <= 1) return { tipo: "na", texto: "— dato único", slope: null };
+        if (n === 2) return { tipo: "na", texto: "indicio (2 datos)", slope: null };
+        const mediaX = (n - 1) / 2.0;
+        const mediaY = puntos.reduce((a, b) => a + b, 0) / n;
+        let num = 0, den = 0;
+        puntos.forEach((p, i) => { num += (i - mediaX) * (p - mediaY); den += (i - mediaX) ** 2; });
+        const slopeCrudo = den ? num / den : 0.0;
+        // round(slope, 4) igual que _direccion_tendencia en app.py.
+        const slope = Math.round(slopeCrudo * 10000) / 10000;
+        if (slope < -UMBRAL_PENDIENTE) return { tipo: "baja", texto: "Baja", slope };
+        if (slope > UMBRAL_PENDIENTE) return { tipo: "sube", texto: "Sube", slope };
+        return { tipo: "estable", texto: "Estable", slope };
+    }
+
+    // Puerto de _productos_resumen (app.py): barras + tabla de sparklines.
+    // `o.fecha` (ISO YYYY-MM-DD o null) ordena los puntos cronológicamente
+    // igual que _fecha_orden; las órdenes sin fecha se mandan al final (mismo
+    // criterio que el sentinela date.max de Python).
+    function productosResumen(ordenes) {
+        const grupos = new Map();
+        for (const o of ordenes) {
+            const cod = (o.cod || "").toString().trim() || "—";
+            let g = grupos.get(cod);
+            if (!g) { g = { cod, nom: (o.nombre || "").toString().trim(), n_ordenes: 0, num: 0, den: 0, puntos: [] }; grupos.set(cod, g); }
+            if (!g.nom && o.nombre) g.nom = o.nombre.toString().trim();
+            g.n_ordenes += 1;
+            if (o.num_ponderado != null && o.den_ponderado != null && Number(o.den_ponderado) > 0) {
+                g.num += Number(o.num_ponderado);
+                g.den += Number(o.den_ponderado);
+            }
+            if (o.pct !== null && o.pct !== undefined) g.puntos.push([o.fecha || null, o.pct]);
+        }
+        let productos = [];
+        for (const g of grupos.values()) {
+            const porcentaje = porcentajePonderado(g.num, g.den);
+            if (porcentaje === null) continue;
+            const serie = g.puntos.slice().sort((a, b) => {
+                const da = a[0], db = b[0];
+                if (da === null && db === null) return 0;
+                if (da === null) return 1;
+                if (db === null) return -1;
+                return da < db ? -1 : da > db ? 1 : 0;
+            }).map(p => p[1]);
+            const nivel = nivelDesperdicio(porcentaje);
+            productos.push({
+                cod: g.cod, nom: g.nom || "Sin nombre", n_ordenes: g.n_ordenes,
+                porcentaje, nivel, spark: sparkline(serie, nivel), direccion: direccionTendencia(serie),
+            });
+        }
+        productos.sort((a, b) => b.porcentaje - a.porcentaje);
+        const maximo = productos.length ? productos[0].porcentaje : 0;
+        for (const p of productos) p.width = maximo > 0 ? Math.round(p.porcentaje / maximo * 100) : 0;
+        return productos;
+    }
+
+    // Precalcula el texto buscable (OP + código + nombre) una sola vez.
+    function normaliza(s) {
+        return (s || '').toString().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+    }
+    ORDENES_DATA.forEach(o => { o._texto = normaliza(`${o.op} ${o.cod || ''} ${o.nombre || ''}`); });
+
+    function pctBadgeHtml(v) {
+        if (v === null || v === undefined) return '<span class="badge badge-pct neutral">—</span>';
+        return `<span class="badge badge-pct ${nivelDesperdicio(v)}">${formatoPct(v)}%</span>`;
+    }
+
+    // Sub-tabla de miembros al desplegar una fila de Análisis (equivalente a
+    // ui.detalle_grupo en macros.html, misma estructura de columnas).
+    function detalleGrupoHtml(miembros) {
+        if (!miembros.length) return '<div class="acc-vacio">Sin órdenes en este grupo.</div>';
+        const filas = miembros.map(o => {
+            const unidadTxt = o.unidad ? ' ' + o.unidad : '';
+            const consumo = (o.suma_cant1 != null) ? (o.suma_cant1 + unidadTxt) : '—';
+            const desperdicio = (o.desperdicio_kg != null) ? (o.desperdicio_kg + unidadTxt) : '—';
+            return `<tr>
+                <td class="mono">${o.op}</td>
+                <td>${escapeHtml(o.nombre) || '—'}</td>
+                <td class="mono cell-2">${o.fecha || '—'}</td>
+                <td class="num mono">${escapeHtml(consumo)}</td>
+                <td class="num mono">${escapeHtml(desperdicio)}</td>
+                <td class="num">${pctBadgeHtml(o.pct)}</td>
+            </tr>`;
+        }).join('');
+        return `<div class="acc-inner"><table class="sub">
+            <thead><tr><th>OP</th><th>Producto</th><th>Fecha</th><th class="num">Consumo</th><th class="num">Desperd.</th><th class="num">%</th></tr></thead>
+            <tbody>${filas}</tbody>
+        </table></div>`;
+    }
+
+    function filaGrupoHtml(f, miembros) {
+        return `<tr class="acc-row"><td>${CHEV}${escapeHtml(f.etiqueta)}</td><td class="num mono">${f.n_ordenes}</td><td class="num">${pctBadgeHtml(f.porcentaje)}</td></tr>
+<tr class="acc-detail" hidden><td colspan="3">${detalleGrupoHtml(miembros)}</td></tr>`;
+    }
+
+    // Re-renderiza una de las 3 sub-tablas de Análisis a partir de las filas
+    // ya agrupadas y el subconjunto de órdenes filtrado (para armar los
+    // miembros de cada grupo, al desplegar).
+    function renderAnalisisTabla(filas, ordenes, claveFn, tbodyId, wrapId, emptyId) {
+        const tbody = document.getElementById(tbodyId);
+        const wrap = document.getElementById(wrapId);
+        const empty = document.getElementById(emptyId);
+        if (!filas.length) {
+            tbody.innerHTML = '';
+            wrap.hidden = true;
+            empty.hidden = false;
+            return;
+        }
+        wrap.hidden = false;
+        empty.hidden = true;
+        tbody.innerHTML = filas.map(f => {
+            const miembros = ordenes.filter(o => {
+                const info = claveFn(o);
+                return info && info[0] === f.id;
+            });
+            return filaGrupoHtml(f, miembros);
+        }).join('');
+    }
+
+    function renderKPIs(kpis, nProductos) {
+        const elTotal = document.getElementById('kpi-total');
+        elTotal.querySelector('.val').textContent = kpis.total;
+        elTotal.querySelector('.sub').innerHTML = `<span class="chip neutral">${nProductos} producto(s)</span>`;
+
+        const elMax = document.getElementById('kpi-max');
+        const valMax = elMax.querySelector('.val');
+        if (kpis.max) {
+            valMax.textContent = formatoPct(kpis.max.porcentaje) + '%';
+            valMax.style.color = nivelColorCss(kpis.max.porcentaje);
+            elMax.querySelector('.sub').innerHTML = `<span class="chip up">OP ${kpis.max.op}</span>`;
+        } else {
+            valMax.textContent = '—';
+            valMax.style.color = 'var(--texto)';
+            elMax.querySelector('.sub').innerHTML = '<span class="chip neutral">sin % calculado</span>';
+        }
+
+        const elMin = document.getElementById('kpi-min');
+        const valMin = elMin.querySelector('.val');
+        if (kpis.min) {
+            valMin.textContent = formatoPct(kpis.min.porcentaje) + '%';
+            valMin.style.color = nivelColorCss(kpis.min.porcentaje);
+            elMin.querySelector('.sub').innerHTML = `<span class="chip down">OP ${kpis.min.op}</span>`;
+        } else {
+            valMin.textContent = '—';
+            valMin.style.color = 'var(--texto)';
+            elMin.querySelector('.sub').innerHTML = '<span class="chip neutral">sin % calculado</span>';
+        }
+
+        const elProm = document.getElementById('kpi-promedio');
+        const valProm = elProm.querySelector('.val');
+        if (kpis.promedioPonderado !== null) {
+            valProm.textContent = formatoPct(kpis.promedioPonderado) + '%';
+            valProm.style.color = nivelColorCss(kpis.promedioPonderado);
+        } else {
+            valProm.textContent = '—';
+            valProm.style.color = 'var(--texto)';
+        }
+    }
+
+    function renderBarsYTrend(productos) {
+        const totalProd = productos.length;
+
+        document.getElementById('bars-subtitulo').textContent =
+            'vista rápida · % ponderado, mayor a menor' + (totalProd > 8 ? ' · Top 8' : '');
+        const verMas = document.getElementById('ver-mas-bars');
+        verMas.hidden = totalProd <= 8;
+        verMas.dataset.total = totalProd;
+        verMas.textContent = `Ver los ${totalProd} en Análisis →`;
+
+        const wrapBars = document.getElementById('wrap-bars');
+        const emptyBars = document.getElementById('empty-bars');
+        const bars = document.getElementById('bars');
+        if (!productos.length) {
+            wrapBars.hidden = true; emptyBars.hidden = false; bars.innerHTML = '';
+        } else {
+            wrapBars.hidden = false; emptyBars.hidden = true;
+            bars.innerHTML = productos.map((p, i) => `
+                <div class="bar-row${i >= 8 ? ' oculto' : ''}">
+                    <div class="bar-name">${escapeHtml(p.nom)} <span class="code">${escapeHtml(p.cod)}</span></div>
+                    <div class="bar-track"><div class="bar-fill ${p.nivel}" style="width:${p.width}%"></div></div>
+                    <div class="bar-val ${p.nivel}">${formatoPct(p.porcentaje)}%</div>
+                </div>`).join('');
+        }
+
+        const wrapTrend = document.getElementById('wrap-trend');
+        const emptyTrend = document.getElementById('empty-trend');
+        const tbodyTrend = document.getElementById('tbody-trend');
+        if (!productos.length) {
+            wrapTrend.hidden = true; emptyTrend.hidden = false; tbodyTrend.innerHTML = '';
+        } else {
+            wrapTrend.hidden = false; emptyTrend.hidden = true;
+            tbodyTrend.innerHTML = productos.map(p => {
+                const sp = p.spark;
+                const polyline = sp.n >= 2
+                    ? `<polyline fill="none" stroke="${sp.stroke}" stroke-width="1.8"${sp.estilo === 'punteado' ? ' stroke-dasharray="3 3"' : ''} points="${sp.puntos}"/>`
+                    : '';
+                const dot = sp.dot
+                    ? `<circle cx="${sp.dot[0]}" cy="${sp.dot[1]}" r="${sp.estilo !== 'linea' ? '2.2' : '2.6'}" fill="${sp.dotFill}"/>`
+                    : '';
+                let direccionHtml;
+                if (p.direccion.tipo === 'baja') {
+                    direccionHtml = '<span class="trend baja"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M7 7l10 10M17 17H9m8 0V9"/></svg>Baja</span>';
+                } else if (p.direccion.tipo === 'sube') {
+                    direccionHtml = '<span class="trend sube"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M7 17L17 7M17 7H9M17 7v8"/></svg>Sube</span>';
+                } else if (p.direccion.tipo === 'estable') {
+                    direccionHtml = '<span class="trend estable">Estable</span>';
+                } else {
+                    direccionHtml = `<span class="trend na">${escapeHtml(p.direccion.texto)}</span>`;
+                }
+                return `<tr>
+                    <td class="prod">${escapeHtml(p.nom)}<span class="code">${escapeHtml(p.cod)} · ${p.n_ordenes} orden(es)</span></td>
+                    <td class="num"><span class="actual ${p.nivel}">${formatoPct(p.porcentaje)}%</span></td>
+                    <td class="spark"><svg width="120" height="30" viewBox="0 0 120 30">${polyline}${dot}</svg></td>
+                    <td class="num">${direccionHtml}</td>
+                </tr>`;
+            }).join('');
+        }
+    }
+
+    // --- Filtro (sub-pestaña, solo Resultado) + buscador + desplegables
+    // multi-selección Producto/Cliente (las 3 pestañas) ---
     const filtros = document.getElementById('filtros');
     const secciones = Array.from(document.querySelectorAll('.orden'));
     const buscar = document.getElementById('buscar-orden');
     const vacio = document.getElementById('orden-vacio');
     let filtroActivo = 'todas';
 
-    // Normaliza para búsqueda insensible a mayúsculas y acentos.
-    function normaliza(s) {
-        return (s || '').toString().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+    // Estado de los desplegables: un Set de ids seleccionados por dimensión.
+    // Vacío = esa dimensión no filtra (todos). Dentro del Set = OR (cualquiera
+    // de los seleccionados); entre dimensiones (producto/cliente/texto) = AND.
+    const filtroProducto = new Set();
+    const filtroCliente = new Set();
+
+    function porEtiqueta(a, b) { return a.etiqueta.localeCompare(b.etiqueta, 'es'); }
+
+    // Opciones de cada desplegable: derivadas de ORDENES_DATA con el MISMO
+    // agrupar()/clave* del motor (no se inventa una lista aparte), solo se
+    // reordenan alfabéticamente para que un desplegable sea fácil de escanear
+    // (a diferencia de Análisis, que ordena por %).
+    const opcionesProducto = agrupar(ORDENES_DATA, claveProducto).sort(porEtiqueta);
+    const opcionesCliente = CLIENTE_DISPONIBLE
+        ? agrupar(ORDENES_DATA, claveCliente).sort((a, b) => {
+            const asin = a.id === "Sin cliente asignado", bsin = b.id === "Sin cliente asignado";
+            if (asin !== bsin) return asin ? 1 : -1;
+            return porEtiqueta(a, b);
+        })
+        : [];
+
+    // Combina texto + producto (OR interno) + cliente (OR interno), todo AND.
+    function subsetFiltrado() {
+        const termino = normaliza(buscar.value.trim());
+        return ORDENES_DATA.filter(o => {
+            if (termino !== '' && o._texto.indexOf(termino) === -1) return false;
+            if (filtroProducto.size > 0 && !filtroProducto.has(claveProducto(o)[0])) return false;
+            if (filtroCliente.size > 0 && !filtroCliente.has(claveCliente(o)[0])) return false;
+            return true;
+        });
     }
 
-    // Texto buscable de cada tarjeta (se cachea una vez).
-    secciones.forEach(sec => { sec.dataset.texto = normaliza(sec.textContent); });
+    // Filas visibles antes de mostrar "+N más" en cada columna del panel.
+    const PF_VISIBLES = 8;
 
-    // Aplica AMBOS filtros: la sub-pestaña activa y el término de búsqueda.
-    function aplicarFiltros() {
-        const termino = normaliza(buscar.value.trim());
+    const ICONO_CHIP_PRODUCTO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 8v8a2 2 0 0 1-1 1.73l-7 4a2 2 0 0 1-2 0l-7-4A2 2 0 0 1 3 16V8a2 2 0 0 1 1-1.73l7-4a2 2 0 0 1 2 0l7 4A2 2 0 0 1 21 8z"/><path d="M3.27 6.96L12 12l8.73-5.04M12 22.08V12"/></svg>';
+    const ICONO_CHIP_CLIENTE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M20 7h-4V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><path d="M9 7V5h6v2"/></svg>';
+
+    function renderListaPanel(prefix, opciones, seleccionSet) {
+        const cont = document.getElementById(`pf-${prefix}-lista`);
+        const masBtn = document.getElementById(`pf-${prefix}-mas`);
+        if (!opciones.length) {
+            cont.innerHTML = '<div class="pf-vacio">Sin opciones.</div>';
+            if (masBtn) masBtn.hidden = true;
+            return;
+        }
+        cont.innerHTML = opciones.map((o, i) => `
+            <label class="pf-item${i >= PF_VISIBLES ? ' pf-oculto-extra' : ''}" data-texto="${escapeHtml(normaliza(o.etiqueta))}">
+                <input type="checkbox" value="${escapeHtml(o.id)}"${seleccionSet.has(o.id) ? ' checked' : ''}>
+                <span>${escapeHtml(o.etiqueta)}</span>
+                <span class="n">${o.n_ordenes}</span>
+            </label>`).join('');
+        const restantes = opciones.length - PF_VISIBLES;
+        if (masBtn) {
+            masBtn.hidden = restantes <= 0;
+            masBtn.textContent = `+${restantes} más ▾`;
+            masBtn.dataset.expandido = 'false';
+        }
+        cont.classList.remove('pf-expandida');
+    }
+
+    // El checkbox "Seleccionar todos" refleja/actúa SOLO sobre las opciones
+    // que no están escondidas por el mini-buscador interno (respeta el "todo
+    // lo visible" pedido), sin importar si están o no dentro del "+N más".
+    function actualizarSeleccionarTodos(prefix, seleccionSet) {
+        const todosChk = document.getElementById(`pf-${prefix}-todos`);
+        const lista = document.getElementById(`pf-${prefix}-lista`);
+        if (!todosChk || !lista) return;
+        const visibles = Array.from(lista.querySelectorAll('.pf-item:not(.pf-oculto-busqueda) input[type="checkbox"]'));
+        todosChk.checked = visibles.length > 0 && visibles.every(c => seleccionSet.has(c.value));
+    }
+
+    // Badge combinado en el botón "Filtros" (cuenta producto + cliente).
+    function actualizarBadgeFiltros() {
+        const total = filtroProducto.size + filtroCliente.size;
+        const badge = document.getElementById('badge-filtros-activos');
+        document.getElementById('btn-filtros').classList.toggle('activo', total > 0);
+        badge.textContent = total;
+        badge.style.display = total > 0 ? '' : 'none';
+    }
+
+    // Cablea una columna del panel (Producto o Cliente): checkboxes,
+    // "Seleccionar todos", mini-buscador interno (filtra la LISTA, no
+    // ORDENES_DATA), "+N más" y "Limpiar". `onChange` es el único punto que
+    // dispara el recálculo real (aplicarBusqueda).
+    function wireColumnaFiltro(prefix, opciones, seleccionSet, onChange) {
+        const lista = document.getElementById(`pf-${prefix}-lista`);
+        if (!lista) return; // p. ej. Cliente cuando clientes.dat no está disponible
+        const buscarInterno = document.getElementById(`pf-${prefix}-buscar`);
+        const limpiar = document.getElementById(`pf-${prefix}-limpiar`);
+        const masBtn = document.getElementById(`pf-${prefix}-mas`);
+        const todosChk = document.getElementById(`pf-${prefix}-todos`);
+
+        renderListaPanel(prefix, opciones, seleccionSet);
+        actualizarSeleccionarTodos(prefix, seleccionSet);
+
+        lista.addEventListener('change', function (ev) {
+            const chk = ev.target.closest('input[type="checkbox"]');
+            if (!chk) return;
+            if (chk.checked) seleccionSet.add(chk.value); else seleccionSet.delete(chk.value);
+            actualizarSeleccionarTodos(prefix, seleccionSet);
+            actualizarBadgeFiltros();
+            onChange();
+        });
+
+        buscarInterno.addEventListener('input', function () {
+            const t = normaliza(buscarInterno.value.trim());
+            lista.querySelectorAll('.pf-item').forEach(item => {
+                const coincide = t === '' || item.dataset.texto.indexOf(t) !== -1;
+                item.classList.toggle('pf-oculto-busqueda', !coincide);
+            });
+            actualizarSeleccionarTodos(prefix, seleccionSet);
+        });
+
+        todosChk.addEventListener('change', function () {
+            const visibles = Array.from(lista.querySelectorAll('.pf-item:not(.pf-oculto-busqueda) input[type="checkbox"]'));
+            visibles.forEach(chk => {
+                chk.checked = todosChk.checked;
+                if (todosChk.checked) seleccionSet.add(chk.value); else seleccionSet.delete(chk.value);
+            });
+            actualizarBadgeFiltros();
+            onChange();
+        });
+
+        if (masBtn) {
+            masBtn.addEventListener('click', function () {
+                const expandirAhora = masBtn.dataset.expandido !== 'true';
+                lista.querySelectorAll('.pf-item').forEach((item, i) => {
+                    if (i >= PF_VISIBLES) item.classList.toggle('pf-oculto-extra', !expandirAhora);
+                });
+                lista.classList.toggle('pf-expandida', expandirAhora);
+                const restantes = opciones.length - PF_VISIBLES;
+                masBtn.textContent = expandirAhora ? 'Ver menos ▲' : `+${restantes} más ▾`;
+                masBtn.dataset.expandido = String(expandirAhora);
+            });
+        }
+
+        limpiar.addEventListener('click', function () {
+            seleccionSet.clear();
+            lista.querySelectorAll('input[type="checkbox"]').forEach(c => { c.checked = false; });
+            if (todosChk) todosChk.checked = false;
+            actualizarBadgeFiltros();
+            onChange();
+        });
+    }
+
+    // Botón "Filtros": único control que abre/cierra el panel (antes había
+    // un segundo botón "Mostrar/Ocultar filtros" a la derecha, consolidado
+    // aquí). El chevron dentro del propio botón (`.abierto` gira el ícono)
+    // es el único indicador de estado. El panel arranca colapsado vía style
+    // inline en el HTML (display:none) — se alterna directamente por estilo
+    // inline (nunca por clase, para no repetir el problema de especificidad
+    // ya resuelto antes) y con eso NUNCA depende de que el JS corra antes
+    // del primer pintado. `.activo` (hay filtros aplicados) es un estado
+    // aparte que la controla actualizarBadgeFiltros(), independiente de si
+    // el panel está abierto o cerrado — así el badge sigue visible aunque el
+    // panel esté colapsado.
+    function togglePanelFiltros() {
+        const panel = document.getElementById('panel-filtros');
+        const abrir = panel.style.display === 'none';
+        panel.style.display = abrir ? 'grid' : 'none';
+        document.getElementById('btn-filtros').classList.toggle('abierto', abrir);
+    }
+    document.getElementById('btn-filtros').addEventListener('click', togglePanelFiltros);
+
+    // Chips de filtros activos (producto/cliente), en su propia fila debajo
+    // del panel, cada uno removible individualmente + "Limpiar todo". El
+    // texto del buscador no genera chip (ya es visible en el propio input).
+    function renderChips() {
+        const cont = document.getElementById('chips-activos');
+        const chips = [];
+        for (const id of filtroProducto) {
+            const opt = opcionesProducto.find(o => o.id === id);
+            chips.push({ tipo: 'producto', id, texto: opt ? opt.id : id, icono: ICONO_CHIP_PRODUCTO });
+        }
+        for (const id of filtroCliente) {
+            const opt = opcionesCliente.find(o => o.id === id);
+            chips.push({ tipo: 'cliente', id, texto: 'Cliente: ' + (opt ? opt.etiqueta : id), icono: ICONO_CHIP_CLIENTE });
+        }
+        if (!chips.length) { cont.hidden = true; cont.innerHTML = ''; return; }
+        cont.hidden = false;
+        cont.innerHTML = chips.map(c => `
+            <span class="chip-filtro" data-tipo="${c.tipo}" data-id="${escapeHtml(c.id)}">
+                ${c.icono}${escapeHtml(c.texto)}<button type="button" aria-label="Quitar filtro">✕</button>
+            </span>`).join('') + '<button type="button" class="chip-limpiar-todo" id="chip-limpiar-todo">Limpiar todo</button>';
+    }
+
+    document.getElementById('chips-activos').addEventListener('click', function (ev) {
+        if (ev.target.id === 'chip-limpiar-todo') {
+            filtroProducto.clear();
+            filtroCliente.clear();
+            document.querySelectorAll('#pf-producto-lista input, #pf-cliente-lista input').forEach(c => { c.checked = false; });
+            document.querySelectorAll('.pf-todos input').forEach(c => { c.checked = false; });
+            actualizarBadgeFiltros();
+            aplicarBusqueda();
+            return;
+        }
+        const btn = ev.target.closest('button');
+        if (!btn) return;
+        const chip = btn.closest('.chip-filtro');
+        const { tipo, id } = chip.dataset;
+        const seleccionSet = tipo === 'producto' ? filtroProducto : filtroCliente;
+        seleccionSet.delete(id);
+        document.querySelectorAll(`#pf-${tipo}-lista input[type="checkbox"]`).forEach(c => { if (c.value === id) c.checked = false; });
+        actualizarSeleccionarTodos(tipo, seleccionSet);
+        actualizarBadgeFiltros();
+        aplicarBusqueda();
+    });
+
+    // Único punto de recálculo: combina texto + producto + cliente
+    // (subsetFiltrado) y re-renderiza las 3 pestañas con ESE subconjunto. La
+    // sub-pestaña "todas/con/sin cálculo" (fpills) sigue siendo exclusiva del
+    // tab Resultado (solo oculta/muestra tarjetas), pero sus CONTEOS ahora
+    // reflejan el subconjunto ya filtrado, no el total original.
+    function aplicarBusqueda() {
+        const subset = subsetFiltrado();
+        const opsMatch = new Set(subset.map(o => o.op));
+        renderChips();
+
+        // Contadores de los fpills, sobre el subconjunto filtrado.
+        const con = subset.filter(o => o.tiene_calculo).length;
+        document.getElementById('fpill-todas').textContent = `Todas · ${subset.length}`;
+        document.getElementById('fpill-con').textContent = `Con desperdicio · ${con}`;
+        document.getElementById('fpill-sin').textContent = `Sin cálculo · ${subset.length - con}`;
+
+        // Resultado: tarjetas ya existentes en el DOM, solo se ocultan/muestran.
         let visibles = 0;
         secciones.forEach(sec => {
+            const op = Number(sec.dataset.op);
             const pasaFiltro = (filtroActivo === 'todas' || sec.dataset.estado === filtroActivo);
-            const pasaBusqueda = (termino === '' || sec.dataset.texto.indexOf(termino) !== -1);
-            const mostrar = pasaFiltro && pasaBusqueda;
+            const mostrar = pasaFiltro && opsMatch.has(op);
             sec.style.display = mostrar ? '' : 'none';
             if (mostrar) visibles++;
         });
         if (visibles === 0) {
             vacio.hidden = false;
-            vacio.innerHTML = buscar.value.trim()
-                ? 'Sin resultados para «<b>' + buscar.value.trim().replace(/</g, '&lt;') + '</b>»'
-                : 'Sin órdenes en esta vista.';
+            const termino = buscar.value.trim();
+            if (termino) {
+                vacio.innerHTML = 'Sin resultados para «<b>' + escapeHtml(termino) + '</b>»';
+            } else if (filtroProducto.size > 0 || filtroCliente.size > 0) {
+                vacio.innerHTML = 'Sin órdenes para los filtros seleccionados.';
+            } else {
+                vacio.innerHTML = 'Sin órdenes en esta vista.';
+            }
         } else {
             vacio.hidden = true;
         }
+
+        // Análisis: las 3 sub-tablas, recalculadas del subconjunto filtrado.
+        const porProducto = ordenarPorProducto(agrupar(subset, claveProducto));
+        const porMes = ordenarPorMes(agrupar(subset, claveMes));
+        renderAnalisisTabla(porProducto, subset, claveProducto, 'tbody-prod', 'wrap-prod', 'empty-prod');
+        renderAnalisisTabla(porMes, subset, claveMes, 'tbody-mes', 'wrap-mes', 'empty-mes');
+        if (CLIENTE_DISPONIBLE) {
+            const porCliente = ordenarPorCliente(agrupar(subset, claveCliente));
+            renderAnalisisTabla(porCliente, subset, claveCliente, 'tbody-cli', 'wrap-cli', 'empty-cli');
+        }
+
+        // Resumen: KPIs + Top 8 + tendencia/sparklines, mismo subconjunto.
+        const resumenVacio = document.getElementById('resumen-vacio');
+        const resumenContenido = document.getElementById('resumen-contenido');
+        if (subset.length === 0) {
+            resumenVacio.hidden = false;
+            resumenContenido.hidden = true;
+        } else {
+            resumenVacio.hidden = true;
+            resumenContenido.hidden = false;
+            renderKPIs(calcularKPIs(subset), porProducto.length);
+            renderBarsYTrend(productosResumen(subset));
+        }
+    }
+
+    wireColumnaFiltro('producto', opcionesProducto, filtroProducto, aplicarBusqueda);
+    wireColumnaFiltro('cliente', opcionesCliente, filtroCliente, aplicarBusqueda);
+
+    // Debounce corto: evita recalcular en cada tecla si el usuario escribe rápido.
+    let debounceBusqueda = null;
+    function aplicarBusquedaDebounced() {
+        if (debounceBusqueda) clearTimeout(debounceBusqueda);
+        debounceBusqueda = setTimeout(aplicarBusqueda, 150);
     }
 
     filtros.querySelectorAll('.fpill').forEach(function (c) {
@@ -401,19 +1152,21 @@
             filtros.querySelectorAll('.fpill').forEach(x => x.classList.remove('active'));
             c.classList.add('active');
             filtroActivo = c.dataset.filter;
-            aplicarFiltros();
+            aplicarBusqueda();
         });
     });
-    buscar.addEventListener('input', aplicarFiltros);
+    buscar.addEventListener('input', aplicarBusquedaDebounced);
 
     // --- Acordeón del tab Análisis: desplegar el detalle de cada grupo ---
-    document.querySelectorAll('.acc-row').forEach(function (row) {
-        row.addEventListener('click', function () {
-            const detalle = row.nextElementSibling;
-            if (!detalle || !detalle.classList.contains('acc-detail')) return;
-            const abierto = row.classList.toggle('open');
-            detalle.hidden = !abierto;
-        });
+    // Delegado en document (no solo en las filas iniciales) para que también
+    // funcione en las filas que re-renderiza aplicarBusqueda().
+    document.addEventListener('click', function (ev) {
+        const row = ev.target.closest('.acc-row');
+        if (!row) return;
+        const detalle = row.nextElementSibling;
+        if (!detalle || !detalle.classList.contains('acc-detail')) return;
+        const abierto = row.classList.toggle('open');
+        detalle.hidden = !abierto;
     });
 
     // "Ver los N en Análisis →": el ranking completo (tabla con filas

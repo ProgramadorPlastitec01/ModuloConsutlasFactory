@@ -417,7 +417,120 @@ body.auth { display: flex; align-items: center; justify-content: center; min-hei
 .note { font-size: 11px; color: var(--texto-3); margin: 2px 0 22px; line-height: 1.5; }
 
 /* =========================================================================
-   BÚSQUEDA EN TIEMPO REAL (tab Resultado)
+   BARRA DE FILTRO GLOBAL (buscador + chips de estado): por encima de los
+   tabs, aplica a Resultado/Análisis/Resumen — ver aplicarBusqueda() en el JS.
+   ========================================================================= */
+.filtro-global {
+    display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-3);
+    margin-bottom: var(--s-3);
+}
+.filtro-global .buscador { margin-bottom: 0; flex: 1 1 260px; }
+.filtro-global .fpills { margin-bottom: 0; }
+.filtro-alcance {
+    display: flex; align-items: center; gap: 5px;
+    font-size: 11.5px; color: var(--texto-3); white-space: nowrap;
+}
+.filtro-alcance svg { width: 13px; height: 13px; stroke-width: 2; flex-shrink: 0; }
+
+/* --- Botón "Filtros": único control que abre/cierra el panel ---
+   `.activo` = hay filtros aplicados (independiente de si el panel está
+   abierto o cerrado: el badge debe seguir visible con el panel colapsado).
+   `.abierto` = el panel está expandido (solo gira el chevron). Los dos
+   estados son independientes y pueden combinarse. */
+.btn-filtros {
+    display: flex; align-items: center; gap: 6px;
+    font-family: var(--sans); font-size: 12.5px; font-weight: 500; color: var(--texto-2);
+    background: var(--superficie); border: 1px solid var(--borde); border-radius: var(--r-sm);
+    padding: 8px 12px; cursor: pointer; transition: border-color .12s, color .12s, background .12s;
+    white-space: nowrap;
+}
+.btn-filtros:hover { border-color: var(--primario); color: var(--texto); }
+.btn-filtros.activo {
+    border-color: var(--primario); color: var(--primario-oscuro); background: var(--primario-suave);
+}
+.btn-filtros svg { width: 13px; height: 13px; stroke-width: 2.2; color: var(--texto-3); flex-shrink: 0; }
+.btn-filtros-chevron-icono { transition: transform .15s ease; }
+.btn-filtros.abierto .btn-filtros-chevron-icono { transform: rotate(180deg); }
+.badge-filtros {
+    background: var(--primario); color: #fff; font-size: 10.5px; font-weight: 700;
+    border-radius: 20px; padding: 1px 7px; line-height: 1.5; font-variant-numeric: tabular-nums;
+}
+
+/* --- Panel de filtros expandible (2 columnas: Cliente / Producto) ---
+   Colapsado por defecto vía style="display:none" inline en el HTML (no
+   depende de que el JS corra antes del primer pintado). El toggle alterna
+   ese mismo estilo inline directamente (evita el problema de especificidad
+   CSS vs. el atributo hidden ya resuelto para otros paneles de esta vista). */
+.panel-filtros {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: var(--s-3); background: var(--superficie); border: 1px solid var(--borde);
+    border-radius: var(--r); box-shadow: var(--sombra); padding: var(--s-3);
+    margin-bottom: var(--s-3);
+}
+.panel-filtros-col { display: flex; flex-direction: column; gap: var(--s-2); min-width: 0; }
+.pf-header { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2); }
+.pf-titulo {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 13px; font-weight: 600; color: var(--texto);
+}
+.pf-titulo svg { width: 15px; height: 15px; stroke-width: 2; color: var(--texto-3); }
+.pf-limpiar {
+    font-size: 12px; color: var(--primario); font-weight: 600; cursor: pointer;
+    background: none; border: none; font-family: var(--sans);
+}
+.pf-limpiar:hover { color: var(--primario-oscuro); }
+.pf-buscar input {
+    width: 100%; font-family: var(--sans); font-size: 12.5px; color: var(--texto);
+    padding: 7px 10px; border: 1px solid var(--borde); border-radius: var(--r-sm);
+    background: var(--fondo); transition: border-color .12s;
+}
+.pf-buscar input:focus { outline: none; border-color: var(--primario); background: var(--superficie); }
+.pf-todos {
+    display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--texto-2);
+    font-weight: 500; cursor: pointer; padding: 2px 0;
+}
+.pf-todos input[type="checkbox"] { accent-color: var(--primario); width: 14px; height: 14px; }
+.pf-lista { display: flex; flex-direction: column; gap: 1px; }
+.pf-lista.pf-expandida { max-height: 260px; overflow-y: auto; }
+.pf-item {
+    display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: var(--r-sm);
+    font-size: 12.5px; color: var(--texto); cursor: pointer;
+}
+.pf-item:hover { background: var(--fondo); }
+.pf-item input[type="checkbox"] { accent-color: var(--primario); width: 14px; height: 14px; flex-shrink: 0; }
+.pf-item span:not(.n) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pf-item .n { margin-left: auto; color: var(--texto-3); font-size: 11px; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.pf-item.pf-oculto-busqueda { display: none; }
+.pf-item.pf-oculto-extra { display: none; }
+.pf-vacio { padding: 10px 0; text-align: center; color: var(--texto-3); font-size: 12px; }
+.pf-mas {
+    align-self: flex-start; font-size: 12px; color: var(--primario); font-weight: 600; cursor: pointer;
+    background: none; border: none; font-family: var(--sans); padding: 2px 0;
+}
+.pf-mas:hover { color: var(--primario-oscuro); }
+
+/* --- Chips de filtros activos (producto / cliente), con ícono por tipo --- */
+.chips-activos { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: var(--s-3); }
+.chip-filtro {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--primario-suave); color: var(--primario-oscuro); font-size: 12px; font-weight: 500;
+    border-radius: 20px; padding: 5px 6px 5px 10px;
+}
+.chip-filtro svg { width: 12px; height: 12px; stroke-width: 2.2; flex-shrink: 0; }
+.chip-filtro button {
+    display: flex; align-items: center; justify-content: center;
+    width: 16px; height: 16px; border-radius: 50%; border: none; background: rgba(79, 70, 229, .15);
+    color: var(--primario-oscuro); cursor: pointer; font-size: 10px; line-height: 1; padding: 0;
+}
+.chip-filtro button:hover { background: rgba(79, 70, 229, .3); }
+.chip-limpiar-todo {
+    font-size: 12px; color: var(--texto-2); font-weight: 600; cursor: pointer;
+    background: none; border: none; font-family: var(--sans); text-decoration: underline;
+}
+.chip-limpiar-todo:hover { color: var(--texto); }
+
+/* =========================================================================
+   BÚSQUEDA EN TIEMPO REAL (barra de filtro global)
    ========================================================================= */
 .buscador { position: relative; margin-bottom: var(--s-3); max-width: 420px; }
 .buscador svg {
@@ -483,7 +596,7 @@ table.sub tbody tr:hover { background: var(--primario-suave); }
     background: #FCECE8; color: var(--alerta);
 }
 .overlay-card .err-ico svg { width: 22px; height: 22px; stroke-width: 2.2; }
-.overlay-card .acciones { margin-top: 20px; display: flex; justify-content: center; }
+.overlay-card .acciones { margin-top: 20px; display: flex; justify-content: center; gap: var(--s-2); }
 
 /* =========================================================================
    RESPONSIVE

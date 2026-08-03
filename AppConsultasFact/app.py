@@ -455,6 +455,7 @@ COLUMN_LABELS = {
     "LOTE": "Lote",
     "CANT1": "Cantidad 1",
     "VENCE": "Vencimiento",
+    "OP_OC": "Orden",
 }
 
 
@@ -466,9 +467,10 @@ def _label_filter(col):
 
 # Prefijos de producto aceptados en el filtro de texto libre (modo producto).
 # El usuario escribe uno de estos y la cabecera se consulta como '<prefijo>%'.
-# Incluye la película (2A10) y el ducto (2A04) de extrusión PP: su desperdicio
-# y su consumo se calculan igual que la manga (mismo filtro de consumo).
-PREFIJOS_PRODUCTO_VALIDOS = ("2A02", "2A03", "2A04", "2A05", "2A06", "2A10")
+# Incluye la película (2A10) y el ducto (2A04) de extrusión PP (desperdicio y
+# consumo igual que la manga) y los farmacéuticos 2B/2C (desperdicio por
+# movimientos Kardex, ver REGLAS_DESPERDICIO_POR_PRODUCTO).
+PREFIJOS_PRODUCTO_VALIDOS = ("2A02", "2A03", "2A04", "2A05", "2A06", "2A10", "2B", "2C")
 
 
 def _construir_filtro(form):
@@ -514,9 +516,12 @@ def _construir_filtro(form):
 
     if not cod:
         raise ValueError("Debe indicar el código de producto (COD).")
-    # Solo se aceptan los prefijos de producto permitidos (texto libre validado).
-    if cod not in PREFIJOS_PRODUCTO_VALIDOS:
-        raise ValueError("Prefijo no válido. Use 2A02, 2A03, 2A04, 2A05, 2A06 o 2A10")
+    # Se acepta cualquier código que EMPIECE por uno de los prefijos permitidos
+    # (no exige coincidencia exacta), para poder filtrar por un código completo
+    # o una sub-familia (p. ej. "2C01") y no solo por el prefijo corto (COD LIKE
+    # '<lo escrito>%' más abajo). Un prefijo no reconocido sigue rechazándose.
+    if not any(cod.startswith(p) for p in PREFIJOS_PRODUCTO_VALIDOS):
+        raise ValueError("Prefijo no válido. Use 2A02, 2A03, 2A04, 2A05, 2A06, 2A10, 2B o 2C")
     if not fecha_desde or not fecha_hasta:
         raise ValueError("El rango de fechas (desde y hasta) es obligatorio.")
 
@@ -552,35 +557,43 @@ def _fetch_dicts(cursor, sql, params):
     return [dict(zip(columnas, fila)) for fila in cursor.fetchall()]
 
 
-# Patrones para extraer el desperdicio (KG) de la NOTA. Se intentan en orden y
-# se usa el primero que matchee:
-#   1. "DES X <valor> KG X"  (con KG y X de cierre) -> "DES X 136.12 KG X ..."
-#   2. "DES X <valor> X"     (sin KG, con X de cierre) -> "DES X 339.7 X"
-#   3. "DES X <valor> KG"    (con KG, SIN exigir X de cierre; fallback) ->
+# Patrones para extraer "valor + unidad" de un texto tipo "DES X <valor>
+# <UND> ...". GENERALIZADO a CUALQUIER unidad (KG, UN, u otras de hasta 6
+# letras), no solo KG: la unidad es un grupo opcional/capturado, no literal.
+# Se intentan en orden y se usa el primero que matchee:
+#   1. "DES X <valor> <UND?> X"  (unidad opcional, con X de cierre) ->
+#      "DES X 136.12 KG X ...", "DES X 2488 UN X VARIOS 50743",
+#      "DES X 339.7 X" (sin unidad; el grupo opcional queda vacío)
+#   2. "DES X <valor> <UND>"     (SIN exigir X de cierre; fallback — la unidad
+#      es obligatoria aquí, es lo único que acota el número) ->
 #      "DES X 128 KG AJST ARRAN DESC PELUZA F 18"
+# Este patrón lo reutilizan tanto la NOTA de la OP (_parse_desperdicio_nota,
+# que ignora la unidad: para la nota siempre es kg) como los movimientos
+# Kardex de la regla farmacéutica (_sumar_kardex_farmaceutico, que sí necesita
+# la unidad real del movimiento, p. ej. "UN").
 NOTA_DESPERDICIO_PATRONES = (
-    re.compile(r"DES\s*X\s*([\d.,]+)\s*KG\s*X", re.IGNORECASE),
-    re.compile(r"DES\s*X\s*([\d.,]+)\s*X", re.IGNORECASE),
-    re.compile(r"DES\s*X\s*([\d.,]+)\s*KG", re.IGNORECASE),
+    re.compile(r"DES\s*X\s*([\d.,]+)\s*([A-Za-z]{1,6})?\s*X", re.IGNORECASE),
+    re.compile(r"DES\s*X\s*([\d.,]+)\s*([A-Za-z]{1,6})\b", re.IGNORECASE),
 )
 
 
-def _parse_desperdicio_nota(nota):
+def _parse_desperdicio_valor_unidad(texto):
     """
-    Extrae el valor de desperdicio (KG) del campo NOTA buscando "DES X <valor> X".
-    Devuelve un float, o None si no se encuentra el patrón o el valor no es
-    numérico.
+    Extrae (valor, unidad) de un texto con el patrón "DES X <valor> <UND> ...".
+    `unidad` es la que aparece en el texto (p. ej. "KG", "UN"), en mayúsculas,
+    o None si el texto no trae unidad (caso "DES X 339.7 X"). Devuelve
+    (None, None) si no hay patrón o el valor no es numérico.
     """
-    if not nota:
-        return None
-    texto = str(nota)
+    if not texto:
+        return None, None
+    cadena = str(texto)
     m = None
     for patron in NOTA_DESPERDICIO_PATRONES:
-        m = patron.search(texto)
+        m = patron.search(cadena)
         if m:
             break
     if not m:
-        return None
+        return None, None
     # El valor puede venir con punto ("23.5") o coma decimal manual ("23,5").
     # Se normaliza a punto sin romper ninguno de los dos formatos. Los valores
     # son < 1000 con punto decimal, así que NO se manejan separadores de miles;
@@ -592,9 +605,24 @@ def _parse_desperdicio_nota(nota):
     else:
         crudo = crudo.replace(",", ".")
     try:
-        return float(crudo)
+        valor = float(crudo)
     except ValueError:
-        return None
+        return None, None
+    unidad = (m.group(2) or "").strip().upper() or None
+    return valor, unidad
+
+
+def _parse_desperdicio_nota(nota):
+    """
+    Extrae el valor de desperdicio (KG) del campo NOTA. Ignora la unidad (para
+    la nota de la OP siempre es kg, confirmado con negocio); el patrón está
+    generalizado en _parse_desperdicio_valor_unidad, que también reutiliza la
+    regla farmacéutica sobre movimientos Kardex (unidad UN u otras).
+    Devuelve un float, o None si no se encuentra el patrón o el valor no es
+    numérico.
+    """
+    valor, _unidad = _parse_desperdicio_valor_unidad(nota)
+    return valor
 
 
 def _sumar_cant1_2a(cursor, op):
@@ -643,6 +671,146 @@ def _sumar_cant1_patron(cursor, op, patron):
     return suma, len(filas)
 
 
+# --- Kardex (regla farmacéutica, prefijos 2B/2C) ---------------------------
+# Para estos productos la NOTA de la OP está bloqueada; el desperdicio se lee
+# de los movimientos de inventario Kardex, en tres tablas con los MISMOS
+# campos (COD, CANT, OP_OC, DES) separadas por ANTIGÜEDAD de la OP. Antes se
+# consultaban las tres con UNION ALL por prudencia (no se sabía en cuál caía
+# cada orden); validado con datos reales que la partición depende de la
+# FECHA_T (término) de la propia OP, así que ahora se resuelve UNA sola tabla
+# por orden (ver _tabla_kardex_por_fecha) — Kardexhi tiene ~4M filas y
+# escanearla siempre añadía minutos por OP. Solo lectura.
+KARDEX_TABLAS = ("Kardex", "KardexA", "Kardexhi")
+KARDEX_TABLAS_VALIDAS = set(KARDEX_TABLAS)
+
+
+def _tabla_kardex_por_fecha(fecha_t, hoy=None):
+    """
+    Resuelve en cuál de las tres tablas Kardex está una OP farmacéutica, según
+    su FECHA_T (fecha de TÉRMINO; FECHA_I NO sirve para esto), relativa a la
+    fecha actual — las tres particionan por antigüedad (validado con datos
+    reales: OP 461221 FECHA_T=2026-07-06 -> "Kardex"; OP 445393
+    FECHA_T=2025-12-22 -> "Kardexhi"):
+
+        mismo año y mismo mes que hoy   -> "Kardex"
+        mismo año, mes ANTERIOR a hoy   -> "KardexA"
+        año ANTERIOR a hoy              -> "Kardexhi"
+
+    Se compara contra la fecha actual en cada ejecución (nunca un valor
+    fijo). Devuelve None si fecha_t es nula o si no encaja en ninguna de las
+    tres ventanas (p. ej. una fecha futura, que no debería darse en una OP ya
+    terminada) — la orden queda "sin cálculo" con alerta, sin reventar.
+    `hoy` es inyectable para pruebas; por defecto date.today().
+    """
+    if fecha_t is None:
+        return None
+    if hoy is None:
+        hoy = date.today()
+    if fecha_t.year == hoy.year and fecha_t.month == hoy.month:
+        return "Kardex"
+    if fecha_t.year == hoy.year and fecha_t.month < hoy.month:
+        return "KardexA"
+    if fecha_t.year < hoy.year:
+        return "Kardexhi"
+    return None
+
+# Detecta si un movimiento Kardex es una fila de desperdicio: su campo DES,
+# ya normalizado con strip() (tolera espacios al inicio/fin del dato crudo),
+# EMPIEZA con "DES X" (ancla ^ sobre el texto normalizado — a diferencia de
+# NOTA_DESPERDICIO_PATRONES que busca en cualquier posición, aquí NUNCA se
+# detecta "DES X" en mitad de otro texto). No se filtra por COD: la selección
+# es por el contenido de DES, la orden puede tener filas de todo tipo en
+# Kardex.
+FILA_DESPERDICIO_PATRON = re.compile(r"^DES\s*X", re.IGNORECASE)
+
+
+def _es_fila_desperdicio(des):
+    """True si el campo DES (normalizado con strip()) de un movimiento Kardex
+    es una fila de desperdicio."""
+    return bool(des) and bool(FILA_DESPERDICIO_PATRON.match(str(des).strip()))
+
+
+KARDEX_COLUMNAS = "OP_OC, COD, CANT, VMP, DOC, LOTE, DES"
+
+
+def _consultar_kardex_op(cursor, op, tabla):
+    """
+    Trae los movimientos Kardex de una orden por OP_OC, de UNA sola tabla (la
+    resuelta por _tabla_kardex_por_fecha según la FECHA_T de la OP) en vez del
+    UNION ALL sobre las tres — Kardexhi tiene ~4M filas y escanearla siempre
+    para las tres tablas tardaba minutos por OP.
+
+    `tabla` DEBE venir del resultado de _tabla_kardex_por_fecha (nunca de
+    entrada de usuario). El nombre de tabla no puede ir parametrizado con '?'
+    en T-SQL, así que se valida contra KARDEX_TABLAS_VALIDAS (un set fijo) y
+    solo entonces se interpola — la OP_OC sí va parametrizada. Solo lectura.
+    """
+    if tabla not in KARDEX_TABLAS_VALIDAS:
+        raise ValueError(f"Tabla Kardex no válida: {tabla!r}")
+    sql = f"SELECT {KARDEX_COLUMNAS} FROM {tabla} WHERE OP_OC = ?"
+    return _fetch_dicts(cursor, sql, [op])
+
+
+def _sumar_kardex_farmaceutico(cursor, op, fecha_t):
+    """
+    Numerador/denominador de la regla farmacéutica para una orden, a partir de
+    sus movimientos Kardex de UNA sola tabla (ver _tabla_kardex_por_fecha,
+    resuelta según la FECHA_T de la propia OP). Solo cuentan las filas cuyo
+    DES empieza con "DES X" (_es_fila_desperdicio); de esas, se parsea el
+    valor y la unidad con _parse_desperdicio_valor_unidad. Si una fila DES no
+    parsea, se IGNORA por completo (ni su valor ni su CANT cuentan):
+
+        num = Σ(valor parseado de DES)     de las filas que sí parsearon
+        den = Σ(CANT)                      de esas mismas filas
+
+    Devuelve (num, den, n_filas_des, n_filas_usadas, unidad, filas, tabla):
+    - n_filas_des: total de filas con patrón "DES X" encontradas (diagnóstico).
+    - n_filas_usadas: cuántas de esas efectivamente parsearon (num/den las
+      incluyen; n_filas_des - n_filas_usadas se ignoraron).
+    - unidad: unidad común de las filas usadas (KG, UN, ...), o None si no hay
+      ninguna o si las filas usadas mezclan unidades distintas (ambiguo).
+    - filas: SOLO las filas Kardex de la OP con patrón "DES X" (no el resto de
+      movimientos), para mostrar en el detalle de la vista — cambio
+      puramente visual, el cálculo de num/den es el mismo con o sin este
+      filtro. Cada dict trae una clave extra "_usada" (bool): True si esa
+      fila efectivamente PARSEÓ y entró en num/den, False si tiene el patrón
+      "DES X" pero no se pudo parsear. No es una columna real de Kardex.
+    - tabla: la tabla Kardex efectivamente consultada, o None si no se pudo
+      resolver (FECHA_T nula o fuera de las tres ventanas) — en ese caso no se
+      ejecuta ninguna consulta y se devuelve todo vacío, sin reventar.
+    """
+    tabla = _tabla_kardex_por_fecha(fecha_t)
+    if tabla is None:
+        return 0.0, 0.0, 0, 0, None, [], None
+
+    filas = _consultar_kardex_op(cursor, op, tabla)
+
+    num = 0.0
+    den = 0.0
+    n_filas_des = 0
+    n_usadas = 0
+    unidades = set()
+    filas_des = []
+    for f in filas:
+        if not _es_fila_desperdicio(f.get("DES")):
+            continue  # no es fila de desperdicio: ni se cuenta ni se muestra
+        n_filas_des += 1
+        f["_usada"] = False
+        valor, unidad = _parse_desperdicio_valor_unidad(f.get("DES"))
+        if valor is not None:
+            cant = f.get("CANT")
+            num += valor
+            den += float(cant) if cant is not None else 0.0
+            n_usadas += 1
+            f["_usada"] = True
+            if unidad:
+                unidades.add(unidad)
+        filas_des.append(f)
+
+    unidad_comun = unidades.pop() if len(unidades) == 1 else None
+    return num, den, n_filas_des, n_usadas, unidad_comun, filas_des, tabla
+
+
 def _calcular_desperdicio(nota, suma_cant1, n_filas_2a):
     """
     Regla GENERAL de cálculo del porcentaje de desperdicio:
@@ -688,19 +856,28 @@ def _calcular_desperdicio(nota, suma_cant1, n_filas_2a):
 # (startswith). Todas las reglas comparten una MISMA firma basada en un
 # contexto (ctx) para poder intercambiarse desde el punto único de cálculo:
 #     regla(ctx) -> dict(valor_nota, suma_cant1, porcentaje, alerta, metodo,
-#                        desperdicio_kg, num_ponderado, den_ponderado)
+#                        desperdicio_kg, unidad, num_ponderado, den_ponderado)
 # ctx trae todo lo que cualquier regla pueda necesitar (nota, consumo
-# 2A0%+2A62%, CANTE de la cabecera y consumo de mezcla 2A01%).
+# 2A0%+2A62%, CANTE de la cabecera, consumo de mezcla 2A01% y movimientos
+# Kardex para la regla farmacéutica).
 #
 # Campos canónicos que TODA regla puebla para el resto de la app:
-#   - metodo: 'nota' (desperdicio leído de la nota) | 'diferencia' (calculado
-#     como consumido - entregado). Sirve para mostrar etiquetas correctas.
-#   - desperdicio_kg: kg de desperdicio de la orden (None si no calculable).
+#   - metodo: 'nota' (leído de la nota) | 'diferencia' (consumido-entregado,
+#     compuesto 2A02) | 'kardex' (leído de movimientos Kardex, farmacéutico
+#     2B/2C). Sirve para mostrar etiquetas correctas.
+#   - desperdicio_kg: kg (o unidad equivalente, ver `unidad`) de desperdicio
+#     de la orden (None si no calculable).
+#   - unidad: unidad del desperdicio/consumo de la orden ('KG' para nota y
+#     diferencia, confirmado con negocio; la unidad real del movimiento para
+#     kardex — 'UN', 'KG', etc. — o None si no se pudo determinar). Los %
+#     siempre son comparables entre unidades; los kg/unidades ABSOLUTOS NO
+#     deben sumarse entre órdenes de distinta unidad.
 #   - num_ponderado / den_ponderado: numerador y denominador con que la orden
 #     entra al PONDERADO de su grupo (None si no debe entrar). Regla por nota:
 #     num = kg de la nota, den = consumo. Regla 2A02: num = kg por diferencia
-#     (>=0), den = entregado (CANTE). Así Σnum/Σden×100 es coherente entre
-#     métodos aunque un grupo (p. ej. por mes) mezcle órdenes de ambos.
+#     (>=0), den = entregado (CANTE). Regla farmacéutica: num = Σ DES
+#     parseado, den = Σ CANT de esas filas. Así Σnum/Σden×100 es coherente
+#     entre métodos aunque un grupo (p. ej. por mes) mezcle varios de ellos.
 
 
 def _regla_nota(ctx):
@@ -713,6 +890,7 @@ def _regla_nota(ctx):
                                 ctx.get("n_filas_2a"))
     res["metodo"] = "nota"
     res["desperdicio_kg"] = res.get("valor_nota")
+    res["unidad"] = "KG"
     # Entra al ponderado con num = kg de la nota, den = consumo (2A0%+2A62%).
     # El gate den > 0 lo aplica cada punto de agregación (excluye consumo 0 y
     # órdenes sin nota, igual que antes).
@@ -747,6 +925,7 @@ def _calcular_desperdicio_2a02(entregado, suma_2a01, n_filas_2a01):
         "metodo": "diferencia",
         "entregado": entregado,      # CANTE (kg producido)
         "desperdicio_kg": None,
+        "unidad": "KG",
         "num_ponderado": None,
         "den_ponderado": None,
     }
@@ -781,10 +960,73 @@ def _regla_compuesto_2a01(ctx):
                                       ctx.get("n_filas_2a01"))
 
 
+def _calcular_desperdicio_farmaceutico(num_kardex, den_kardex, n_filas_des,
+                                       n_filas_usadas, unidad, tabla_kardex=None):
+    """
+    Regla FARMACÉUTICA (prefijos 2B/2C). La NOTA de la OP está BLOQUEADA para
+    estos productos; el desperdicio se lee de los movimientos Kardex (ver
+    _sumar_kardex_farmaceutico, hoy UNA sola tabla resuelta por FECHA_T, ver
+    _tabla_kardex_por_fecha), en las filas cuyo DES tiene el patrón
+    "DES X <valor> <UND> ...":
+
+        % = Σ(DES parseado) / Σ(CANT) × 100
+
+    UNIDADES: DES y CANT de una misma fila están en la MISMA unidad
+    (confirmado), por eso el % es válido; pero productos distintos pueden
+    tener unidades distintas (UN, KG, ...) — el % es lo único agregable entre
+    órdenes; el desperdicio absoluto NUNCA debe sumarse entre unidades.
+
+    Validación de referencia (OP_OC 463021): DES "DES X 2488 UN X VARIOS
+    50743" -> valor 2488, unidad UN.
+    """
+    resultado = {
+        "valor_nota": None,          # esta regla NO usa la nota (bloqueada)
+        "suma_cant1": den_kardex,    # denominador = Σ CANT de las filas DES
+        "porcentaje": None,
+        "alerta": None,
+        "metodo": "kardex",
+        "desperdicio_kg": None,      # canónico; aquí puede NO ser kg (ver unidad)
+        "unidad": unidad,
+        "n_filas_des": n_filas_des,
+        "num_ponderado": None,
+        "den_ponderado": None,
+        "tabla_kardex": tabla_kardex,  # diagnóstico: tabla efectivamente usada
+    }
+    # Sin tabla resoluble (FECHA_T nula o fuera de las tres ventanas): no se
+    # llegó a consultar Kardex, se distingue del caso "sin filas DES".
+    if tabla_kardex is None:
+        resultado["alerta"] = "Sin FECHA_T de la orden: no se pudo determinar la tabla Kardex"
+        return resultado
+    # Sin filas "DES X" en Kardex, o ninguna parseable: no forzar un número.
+    if n_filas_usadas == 0:
+        resultado["alerta"] = "Sin filas de desperdicio (DES X) en Kardex para calcular"
+        return resultado
+    den_f = float(den_kardex) if den_kardex is not None else 0.0
+    if den_f <= 0:
+        resultado["alerta"] = "Sin consumo (Σ CANT) en Kardex para calcular"
+        return resultado
+
+    resultado["desperdicio_kg"] = round(float(num_kardex), 2)
+    resultado["porcentaje"] = round((float(num_kardex) / den_f) * 100, 2)
+    resultado["num_ponderado"] = float(num_kardex)
+    resultado["den_ponderado"] = den_f
+    return resultado
+
+
+def _regla_farmaceutica(ctx):
+    """Adapta la regla farmacéutica (Kardex, 2B/2C) al contrato de contexto."""
+    return _calcular_desperdicio_farmaceutico(
+        ctx.get("num_kardex"), ctx.get("den_kardex"),
+        ctx.get("n_filas_des", 0), ctx.get("n_filas_kardex_usadas", 0),
+        ctx.get("unidad_kardex"), ctx.get("tabla_kardex"))
+
+
 # Registro de reglas por prefijo de producto (COD). Coincidencia por startswith
 # (la primera que coincide gana). Prefijo sin regla -> regla general por nota.
 REGLAS_DESPERDICIO_POR_PRODUCTO = {
     "2A02": _regla_compuesto_2a01,   # compuesto mezcla/peletizado: por diferencia
+    "2B": _regla_farmaceutica,       # farmacéutico: por movimientos Kardex
+    "2C": _regla_farmaceutica,       # farmacéutico: por movimientos Kardex
 }
 
 
@@ -803,12 +1045,16 @@ def _regla_desperdicio(cod):
 
 
 def _calcular_desperdicio_producto(cod, nota, suma_cant1, n_filas_2a,
-                                   cante=None, suma_2a01=None, n_filas_2a01=0):
+                                   cante=None, suma_2a01=None, n_filas_2a01=0,
+                                   num_kardex=None, den_kardex=None,
+                                   n_filas_des=0, n_filas_kardex_usadas=0,
+                                   unidad_kardex=None, tabla_kardex=None):
     """
     Punto ÚNICO de cálculo del desperdicio por orden. Arma el contexto con todo
     lo que cualquier regla pueda necesitar y delega en la regla del producto
     (selección por prefijo). El compuesto (2A02) calcula por diferencia
-    (CANTE vs. consumo de mezcla 2A01); el resto lee la nota.
+    (CANTE vs. consumo de mezcla 2A01); el farmacéutico (2B/2C) por movimientos
+    Kardex; el resto lee la nota.
     """
     ctx = {
         "cod": cod,
@@ -818,6 +1064,12 @@ def _calcular_desperdicio_producto(cod, nota, suma_cant1, n_filas_2a,
         "cante": cante,
         "suma_2a01": suma_2a01,
         "n_filas_2a01": n_filas_2a01,
+        "num_kardex": num_kardex,
+        "den_kardex": den_kardex,
+        "n_filas_des": n_filas_des,
+        "n_filas_kardex_usadas": n_filas_kardex_usadas,
+        "unidad_kardex": unidad_kardex,
+        "tabla_kardex": tabla_kardex,
     }
     regla = _regla_desperdicio(cod)
     return regla(ctx)
@@ -865,6 +1117,19 @@ def _consultar_ordenes(form):
             for op in ops
             if _regla_desperdicio(cod_por_op.get(op)) is _regla_compuesto_2a01
         }
+
+        # Movimientos Kardex SOLO para las órdenes cuya regla lo requiere (hoy
+        # el farmacéutico 2B/2C, que calcula sobre las filas "DES X" de UNA
+        # sola tabla Kardex/KardexA/Kardexhi, resuelta por la FECHA_T de cada
+        # OP — ver _tabla_kardex_por_fecha). Se detecta por la misma regla
+        # registrada, evitando la consulta extra (de solo lectura) para los
+        # demás.
+        fecha_t_por_op = {fila["OP"]: fila.get("FECHA_T") for fila in cabecera_filas}
+        sumas_kardex = {
+            op: _sumar_kardex_farmaceutico(cursor, op, fecha_t_por_op.get(op))
+            for op in ops
+            if _regla_desperdicio(cod_por_op.get(op)) is _regla_farmaceutica
+        }
         cursor.close()
     finally:
         if conn is not None:
@@ -874,24 +1139,32 @@ def _consultar_ordenes(form):
     agrupado = {}
 
     def _bucket(op):
-        return agrupado.setdefault(op, {"op": op, "cabecera": None, "detalle": []})
+        return agrupado.setdefault(
+            op, {"op": op, "cabecera": None, "detalle": [], "detalle_kardex": []})
 
     for fila in cabecera_filas:
         _bucket(fila["OP"])["cabecera"] = fila
     for fila in detalle_filas:
         _bucket(fila["OP"])["detalle"].append(fila)
+    for op, tupla_kardex in sumas_kardex.items():
+        _bucket(op)["detalle_kardex"] = tupla_kardex[5]  # posición 5: filas
 
     # Calcular el desperdicio de cada orden (regla según el producto).
     for op, orden in agrupado.items():
         suma, n_filas = sumas_2a.get(op, (0, 0))
         suma01, n01 = sumas_2a01.get(op, (0, 0))
+        num_k, den_k, n_des, n_usadas, unidad_k, _filas_k, tabla_k = sumas_kardex.get(
+            op, (0.0, 0.0, 0, 0, None, [], None))
         cab = orden["cabecera"]
         nota = cab.get("NOTA") if cab else None
         cod = cab.get("COD") if cab else None
         cante = cab.get("CANTE") if cab else None
         orden["desperdicio"] = _calcular_desperdicio_producto(
             cod, nota, suma, n_filas,
-            cante=cante, suma_2a01=suma01, n_filas_2a01=n01)
+            cante=cante, suma_2a01=suma01, n_filas_2a01=n01,
+            num_kardex=num_k, den_kardex=den_k, n_filas_des=n_des,
+            n_filas_kardex_usadas=n_usadas, unidad_kardex=unidad_k,
+            tabla_kardex=tabla_k)
 
     # Ordenar por número de OP para una salida estable.
     return [agrupado[k] for k in sorted(agrupado)]
@@ -1413,6 +1686,69 @@ def _analizar_ordenes(ordenes):
     }
 
 
+def _ordenes_data_json(ordenes):
+    """
+    Dataset por orden para el motor de agregación en cliente (buscador que
+    re-renderiza Resultado/Análisis/Resumen sin reconsultar). Se llama DESPUÉS
+    de _analizar_ordenes (que anota `grupo_cliente` en cada orden) para poder
+    incluirlo. NO recalcula nada: solo lee valores que el backend YA calculó
+    (num_ponderado/den_ponderado/porcentaje de la regla de cada orden, el
+    mismo grupo_cliente Opción B de Análisis).
+
+    `mes` usa FECHA_I (igual que _clave_mes; FECHA_T es solo para resolver la
+    tabla Kardex, un asunto distinto). `fecha` (ISO YYYY-MM-DD o None) es un
+    campo EXTRA no pedido explícitamente, necesario para que el sparkline de
+    "Tendencia por producto" ordene los puntos cronológicamente igual que
+    _fecha_orden — con "mes" solo, dos órdenes del mismo mes quedarían en
+    orden arbitrario y el sparkline no coincidiría con el de Python.
+    `suma_cant1`/`desperdicio_kg`/`unidad` también se agregan (ya calculados,
+    cero costo) para que las sub-tablas de detalle del acordeón (clic en una
+    fila de Análisis) puedan reconstruirse completas en JS, igual que
+    ui.detalle_grupo hoy en Jinja.
+
+    IMPORTANTE: `suma_cant1`/`den_ponderado` de la regla por NOTA vienen tal
+    cual de pyodbc (decimal.Decimal, ver _sumar_cant1_2a), no como float — a
+    diferencia de las reglas 2A02/kardex que ya normalizan. `tojson`/`json`
+    NO sabe serializar Decimal, así que aquí se fuerza float() a los 4 campos
+    numéricos (ninguno debe llegar nunca como Decimal al HTML).
+    """
+    def _num(v):
+        return float(v) if v is not None else None
+
+    datos = []
+    for orden in ordenes:
+        cab = orden.get("cabecera") or {}
+        desp = orden.get("desperdicio") or {}
+        fecha_i = cab.get("FECHA_I")
+        # Mismo criterio que _clave_mes: pyodbc puede devolver datetime.datetime
+        # O datetime.date "pelado" (sin hora) según el tipo de columna en SQL
+        # Server; hay que aceptar ambos, no solo datetime.
+        if isinstance(fecha_i, datetime) or (
+            hasattr(fecha_i, "year") and hasattr(fecha_i, "month") and hasattr(fecha_i, "day")
+        ):
+            mes = f"{fecha_i.year:04d}-{fecha_i.month:02d}"
+            fecha_iso = f"{fecha_i.year:04d}-{fecha_i.month:02d}-{fecha_i.day:02d}"
+        else:
+            mes = "9999-99"
+            fecha_iso = None
+        datos.append({
+            "op": orden.get("op"),
+            "cod": cab.get("COD"),
+            "nombre": cab.get("NOM"),
+            "mes": mes,
+            "fecha": fecha_iso,
+            "grupo_cliente": orden.get("grupo_cliente") or "Sin cliente asignado",
+            "num_ponderado": _num(desp.get("num_ponderado")),
+            "den_ponderado": _num(desp.get("den_ponderado")),
+            "tiene_calculo": desp.get("porcentaje") is not None,
+            "pct": desp.get("porcentaje"),
+            "suma_cant1": _num(desp.get("suma_cant1")),
+            "desperdicio_kg": _num(desp.get("desperdicio_kg")),
+            "unidad": desp.get("unidad"),
+        })
+    return datos
+
+
 @app.route("/ordenes-produccion/consultar", methods=["POST"])
 @login_required
 def ordenes_produccion_consultar():
@@ -1441,13 +1777,17 @@ def ordenes_produccion_consultar():
         analisis=analisis,
         resumen=_resumen_ordenes(ordenes, analisis),
         filtro=_extraer_filtro(request.form),
+        ordenes_data=_ordenes_data_json(ordenes),
     ), 200
 
 
 def _generar_excel(ordenes):
     """
     Construye un .xlsx en memoria: una sola tabla con una fila por OP y las
-    columnas OP, Fecha, Metros, Kg compuesto, Kg desperdicio y % desperdicio.
+    columnas OP, Fecha, Metros, Kg compuesto, Kg desperdicio, Unidad y
+    % desperdicio. La columna Unidad aclara en qué unidad están las dos
+    anteriores: 'KG' para las reglas por nota/diferencia, o la unidad real del
+    movimiento (p. ej. 'UN') para la regla farmacéutica (Kardex).
     Si una OP tiene alerta, el % y los Kg desperdicio quedan con el texto de la
     alerta / vacíos. Devuelve un BytesIO listo para send_file.
     """
@@ -1467,6 +1807,7 @@ def _generar_excel(ordenes):
         "Metros",
         "Kg compuesto",
         "Kg desperdicio",
+        "Unidad",
         "% desperdicio",
     ]
     for i, texto in enumerate(encabezados, start=1):
@@ -1502,8 +1843,9 @@ def _generar_excel(ordenes):
             cab.get("NOM"),        # Nombre
             fecha_i,               # Fecha (sin hora)
             cab.get("CANTE"),      # Metros (para 2A02 = kg entregado)
-            d.get("suma_cant1"),   # Kg consumo (2A0/2A62; para 2A02 = mezcla 2A01)
-            kg_desperdicio,        # Kg desperdicio (nota o diferencia)
+            d.get("suma_cant1"),   # Consumo (2A0/2A62; 2A02=mezcla 2A01; Kardex=Σ CANT)
+            kg_desperdicio,        # Desperdicio (nota, diferencia o Kardex)
+            d.get("unidad"),       # Unidad del consumo/desperdicio (KG, UN, ...)
             porcentaje,            # % o texto de alerta
         ]
         for i, valor in enumerate(valores, start=1):
@@ -1514,7 +1856,7 @@ def _generar_excel(ordenes):
         fila += 1
 
     # Anchos de columna para legibilidad
-    anchos = [12, 14, 30, 14, 12, 16, 16, 26]
+    anchos = [12, 14, 30, 14, 12, 16, 16, 10, 26]
     for i, ancho in enumerate(anchos, start=1):
         ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = ancho
 
@@ -1813,7 +2155,7 @@ def _generar_pdf(ordenes, analisis, resumen, filtro):
     flow.append(Paragraph("Detalle de órdenes", S["h2"]))
     datos = [[Paragraph("OP", S["th"]), Paragraph("CÓDIGO", S["th"]), Paragraph("NOMBRE", S["th"]),
               Paragraph("FECHA", S["th"]), Paragraph("CONSUMO", S["thr"]),
-              Paragraph("DESPERD. (KG)", S["thr"]), Paragraph("%", S["thr"])]]
+              Paragraph("DESPERD.", S["thr"]), Paragraph("%", S["thr"])]]
     for orden in ordenes:
         cab = orden.get("cabecera") or {}
         d = orden.get("desperdicio") or {}
@@ -1822,13 +2164,22 @@ def _generar_pdf(ordenes, analisis, resumen, filtro):
             pct_par = Paragraph(f'<b><font color="{hex_pct(pct)}">{pct}%</font></b>', S["cellr"])
         else:
             pct_par = Paragraph(f'<font color="#9296A1" size="7">{esc(d.get("alerta") or "—")}</font>', S["cellr"])
+        # Farmacéutico (Kardex): la unidad puede NO ser kg (p. ej. UN), se
+        # aclara junto al número. Las demás reglas siguen mostrando el número
+        # sin sufijo, como antes (siempre son kg).
+        sufijo_unidad = f" {d['unidad']}" if d.get("metodo") == "kardex" and d.get("unidad") else ""
+
+        def fmt_con_unidad(x):
+            txt = fmt_num(x)
+            return txt + sufijo_unidad if (txt != "—" and sufijo_unidad) else txt
+
         datos.append([
             Paragraph(esc(orden.get("op")), S["cell"]),
             Paragraph(esc(cab.get("COD")), S["cell"]),
             Paragraph(esc(cab.get("NOM")), S["cell"]),
             Paragraph(fmt_fecha(cab.get("FECHA_I")), S["cell"]),
-            Paragraph(fmt_num(d.get("suma_cant1")), S["cellr"]),
-            Paragraph(fmt_num(d.get("desperdicio_kg")), S["cellr"]),
+            Paragraph(esc(fmt_con_unidad(d.get("suma_cant1"))), S["cellr"]),
+            Paragraph(esc(fmt_con_unidad(d.get("desperdicio_kg"))), S["cellr"]),
             pct_par,
         ])
     t_det = LongTable(datos, colWidths=[16 * mm, 24 * mm, 54 * mm, 22 * mm, 24 * mm, 18 * mm, 16 * mm], repeatRows=1)

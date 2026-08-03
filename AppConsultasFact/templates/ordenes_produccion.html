@@ -20,7 +20,7 @@
         {% call ui.card('Producto', 'Prefijo de código y rango de fechas de inicio') %}
             <div class="form-grid">
                 {{ ui.field('Prefijo de producto (COD)', 'cod', placeholder='2A02',
-                            hint='Prefijos válidos: 2A02, 2A03, 2A04, 2A05, 2A06, 2A10') }}
+                            hint='Prefijos válidos: 2A02, 2A03, 2A04, 2A05, 2A06, 2A10, 2B, 2C') }}
                 {{ ui.field('Fecha desde', 'fecha_desde', tipo='date') }}
                 {{ ui.field('Fecha hasta', 'fecha_hasta', tipo='date') }}
             </div>
@@ -51,6 +51,14 @@
         <div class="spinner"></div>
         <div class="titulo">Consultando…</div>
         <div class="sub">Estamos procesando tu consulta. Esto puede tardar unos segundos.</div>
+    </div>
+    <div class="overlay-card" id="overlay-demora" hidden>
+        <div class="titulo">La consulta está tardando</div>
+        <div class="sub">¿Seguir esperando o ajustar el rango de fechas?</div>
+        <div class="acciones">
+            <button type="button" class="btn btn-ghost" id="overlay-seguir-esperando">Seguir esperando</button>
+            <button type="button" class="btn btn-primary" id="overlay-ajustar-filtros">Ajustar filtros</button>
+        </div>
     </div>
     <div class="overlay-card" id="overlay-error" hidden>
         <div class="err-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16h.01"/></svg></div>
@@ -111,42 +119,88 @@
     // Estado inicial coherente con el radio seleccionado.
     actualizarModo();
 
-    // --- Overlay de carga + timeout de navegador al ejecutar la consulta ---
-    // Umbral de espera antes de avisar que la consulta tarda demasiado.
-    const TIMEOUT_CONSULTA_MS = 35000;
+    // --- Overlay de carga + avisos de demora al ejecutar la consulta ---
+    // Aviso suave, repetido: la consulta (2B/2C sobre Kardex puede tardar) sigue
+    // pendiente, solo se avisa; no aborta nada del lado servidor.
+    const AVISO_DEMORA_MS = 60000;
+    // Límite final "duro": si tras varios avisos sigue sin responder.
+    const TIMEOUT_CONSULTA_MS = 300000;
 
     const form = document.getElementById('filtro-form');
     const overlay = document.getElementById('overlay-carga');
     const cajaCargando = document.getElementById('overlay-cargando');
+    const cajaDemora = document.getElementById('overlay-demora');
     const cajaError = document.getElementById('overlay-error');
     const btnCerrar = document.getElementById('overlay-cerrar');
+    const btnSeguirEsperando = document.getElementById('overlay-seguir-esperando');
+    const btnAjustarFiltros = document.getElementById('overlay-ajustar-filtros');
     let timerConsulta = null;
+    let intervalDemora = null;
+    let btnEnviar = null;
+
+    function limpiarTimers() {
+        if (timerConsulta) clearTimeout(timerConsulta);
+        if (intervalDemora) clearInterval(intervalDemora);
+        timerConsulta = null;
+        intervalDemora = null;
+    }
+
+    function cerrarOverlay() {
+        limpiarTimers();
+        overlay.hidden = true;
+        if (btnEnviar) btnEnviar.disabled = false;  // permitir reintentar / ajustar y reenviar
+    }
+
+    function mostrarAvisoDemora() {
+        cajaCargando.hidden = true;
+        cajaDemora.hidden = false;
+    }
 
     form.addEventListener('submit', function () {
         // Mostrar overlay y deshabilitar el botón para impedir doble envío.
+        cajaDemora.hidden = true;
         cajaError.hidden = true;
         cajaCargando.hidden = false;
         overlay.hidden = false;
-        const btnEnviar = form.querySelector('button[type="submit"]');
+        btnEnviar = form.querySelector('button[type="submit"]');
         if (btnEnviar) btnEnviar.disabled = true;
+
+        // Aviso suave cada 60 s mientras siga pendiente.
+        intervalDemora = setInterval(mostrarAvisoDemora, AVISO_DEMORA_MS);
 
         // Timeout SOLO del navegador: la consulta puede seguir en el servidor.
         timerConsulta = setTimeout(function () {
+            if (intervalDemora) clearInterval(intervalDemora);
+            intervalDemora = null;
+            cajaDemora.hidden = true;
             cajaCargando.hidden = true;
             cajaError.hidden = false;
             if (btnEnviar) btnEnviar.disabled = false;  // permitir reintentar
         }, TIMEOUT_CONSULTA_MS);
     });
 
-    btnCerrar.addEventListener('click', function () {
-        if (timerConsulta) clearTimeout(timerConsulta);
-        overlay.hidden = true;
+    // "Seguir esperando": cierra el aviso y continúa la espera (el intervalo
+    // sigue corriendo, por lo que se repite a los 60 s si sigue pendiente).
+    btnSeguirEsperando.addEventListener('click', function () {
+        cajaDemora.hidden = true;
+        cajaCargando.hidden = false;
     });
+
+    // "Ajustar filtros": cancelación SOLO del lado cliente (deja de esperar la
+    // respuesta en el navegador); NO modifica la consulta ya lanzada en el
+    // servidor. El formulario de filtros queda visible y editable para reducir
+    // el rango de fechas y volver a consultar.
+    btnAjustarFiltros.addEventListener('click', function () {
+        window.stop();
+        cerrarOverlay();
+    });
+
+    btnCerrar.addEventListener('click', cerrarOverlay);
 
     // Al volver con el botón "atrás" (bfcache), asegurar que el overlay no quede visible.
     window.addEventListener('pageshow', function () {
         overlay.hidden = true;
-        if (timerConsulta) clearTimeout(timerConsulta);
+        limpiarTimers();
     });
 </script>
 {% endblock %}
