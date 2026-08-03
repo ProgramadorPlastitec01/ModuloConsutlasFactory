@@ -366,6 +366,9 @@ body.auth { display: flex; align-items: center; justify-content: center; min-hei
 }
 .fpill:hover { background: var(--fondo); color: var(--texto); }
 .fpill.active { background: var(--primario-suave); color: var(--primario-oscuro); font-weight: 600; }
+/* "Sin desperdicio" (0% real, ya calculado): matiz verde sutil, coherente con
+   la escala de color del % (< 10% = verde), sin romper el estilo de las pills. */
+.fpill[data-filter="sin-desperdicio"].active { background: var(--verde-suave); color: var(--verde); }
 
 /* =========================================================================
    RESUMEN v2: barras horizontales + tabla de tendencia (sparklines)

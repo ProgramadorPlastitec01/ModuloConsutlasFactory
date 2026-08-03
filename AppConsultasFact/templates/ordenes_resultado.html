@@ -49,14 +49,22 @@
         {% endcall %}
     {% else %}
 
-    {# Contadores del segmento de filtros del tab Resultado. La clasificación es
-       BINARIA: una orden tiene % calculado ("con") o no ("sin cálculo"),
-       cualquiera sea el método (nota o diferencia) o el motivo. Solo se cuenta
-       "con"; "sin cálculo" se deriva como total − con, así la identidad
-       Todas == Con desperdicio + Sin cálculo se cumple por construcción. #}
-    {% set ns = namespace(con=0) %}
+    {# Contadores del segmento de filtros del tab Resultado. Clasificación de
+       PRESENTACIÓN en 3 categorías (el cálculo/ponderado NO cambia con esto):
+         - "con": % calculado y > 0 (desperdicio real).
+         - "sindesp": % calculado y EXACTAMENTE 0 (0% real, ver decisión de
+           negocio en _calcular_desperdicio) — tiene cálculo efectivo, solo que
+           no hubo desperdicio. Sigue entrando al ponderado igual que "con".
+         - resto -> "sin cálculo" (sin base: consumo=0 o nota no parseable).
+       Solo se cuentan "con" y "sindesp"; "sin cálculo" se deriva como total −
+       con − sindesp, así Todas == Con desperdicio + Sin desperdicio + Sin
+       cálculo se cumple por construcción (antes eran 2 sumandos). #}
+    {% set ns = namespace(con=0, sindesp=0) %}
     {% for o in ordenes %}
-        {% if o.desperdicio.porcentaje is not none %}{% set ns.con = ns.con + 1 %}{% endif %}
+        {% if o.desperdicio.porcentaje is none %}
+        {% elif o.desperdicio.porcentaje > 0 %}{% set ns.con = ns.con + 1 %}
+        {% else %}{% set ns.sindesp = ns.sindesp + 1 %}
+        {% endif %}
     {% endfor %}
 
     {# Barra de filtro GLOBAL: buscador + botón "Filtros" (con badge) + panel
@@ -65,8 +73,9 @@
        y Resumen), no solo a Resultado. Todo se combina en subsetFiltrado()
        (texto AND producto-OR AND cliente-OR) y se pasa al MISMO
        agregar()/aplicarBusqueda() del motor JS — sin tocar backend ni la
-       consulta. Los contadores Todas/Con/Sin cálculo (fpills) son la ÚNICA
-       fuente de verdad para el filtro de estado; el panel NO los duplica. #}
+       consulta. Los contadores Todas/Con/Sin desperdicio/Sin cálculo (fpills)
+       son la ÚNICA fuente de verdad para el filtro de estado; el panel NO los
+       duplica. #}
     <div class="filtro-global">
         <div class="buscador">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
@@ -81,7 +90,8 @@
         <div class="fpills" id="filtros">
             <button type="button" class="fpill active" data-filter="todas" id="fpill-todas">Todas · {{ ordenes|length }}</button>
             <button type="button" class="fpill" data-filter="con" id="fpill-con">Con desperdicio · {{ ns.con }}</button>
-            <button type="button" class="fpill" data-filter="sin-calculo" id="fpill-sin">Sin cálculo · {{ ordenes|length - ns.con }}</button>
+            <button type="button" class="fpill" data-filter="sin-desperdicio" id="fpill-sindesp">Sin desperdicio · {{ ns.sindesp }}</button>
+            <button type="button" class="fpill" data-filter="sin-calculo" id="fpill-sin">Sin cálculo · {{ ordenes|length - ns.con - ns.sindesp }}</button>
         </div>
 
         <span class="filtro-alcance">Filtra Resultado, Análisis y Resumen</span>
@@ -128,9 +138,16 @@
 
         {% for orden in ordenes %}
         {% set d = orden.desperdicio %}
-        {# Clasificación binaria: con % calculado o sin cálculo (por cualquier
-           motivo/método). Debe coincidir con los contadores de arriba. #}
-        {% set estado = 'con' if d.porcentaje is not none else 'sin-calculo' %}
+        {# Clasificación de presentación (3 vías), debe coincidir con los
+           contadores de arriba: con (%>0) / sin-desperdicio (%==0, ya
+           calculado) / sin-calculo (sin %). NO afecta el cálculo. #}
+        {% if d.porcentaje is none %}
+            {% set estado = 'sin-calculo' %}
+        {% elif d.porcentaje > 0 %}
+            {% set estado = 'con' %}
+        {% else %}
+            {% set estado = 'sin-desperdicio' %}
+        {% endif %}
         <section class="orden card" data-estado="{{ estado }}" data-op="{{ orden.op }}">
             <div class="card-h">
                 <div>
@@ -886,8 +903,21 @@
         })
         : [];
 
+    // Clasificación de PRESENTACIÓN de una orden (JS, sobre ORDENES_DATA), en
+    // paridad con el `estado` que calcula Jinja para el render inicial: "con"
+    // (%>0), "sin-desperdicio" (0% real, ya calculado) o "sin-calculo" (sin
+    // %). Solo reetiqueta; no toca tiene_calculo/pct/num/den.
+    function estadoOrden(o) {
+        if (!o.tiene_calculo) return 'sin-calculo';
+        return o.pct > 0 ? 'con' : 'sin-desperdicio';
+    }
+
     // Combina texto + producto (OR interno) + cliente (OR interno), todo AND.
-    function subsetFiltrado() {
+    // NO incluye el estado (fpill) a propósito: es la base sobre la que se
+    // calculan los 4 contadores (para que "Con desperdicio"/"Sin
+    // desperdicio"/"Sin cálculo" sigan mostrando su cuenta real aunque el
+    // usuario esté parado en otro de los 4).
+    function subsetSinEstado() {
         const termino = normaliza(buscar.value.trim());
         return ORDENES_DATA.filter(o => {
             if (termino !== '' && o._texto.indexOf(termino) === -1) return false;
@@ -895,6 +925,16 @@
             if (filtroCliente.size > 0 && !filtroCliente.has(claveCliente(o)[0])) return false;
             return true;
         });
+    }
+
+    // subsetSinEstado() + el fpill activo (todas/con/sin-desperdicio/sin-
+    // calculo). Este es el subconjunto que se muestra/calcula en las 3
+    // pestañas (Resultado/Análisis/Resumen) — el filtro de estado aplica
+    // igual que el resto de dimensiones (texto, producto, cliente).
+    function subsetFiltrado() {
+        const base = subsetSinEstado();
+        if (filtroActivo === 'todas') return base;
+        return base.filter(o => estadoOrden(o) === filtroActivo);
     }
 
     // Filas visibles antes de mostrar "+N más" en cada columna del panel.
@@ -1074,28 +1114,39 @@
         aplicarBusqueda();
     });
 
-    // Único punto de recálculo: combina texto + producto + cliente
-    // (subsetFiltrado) y re-renderiza las 3 pestañas con ESE subconjunto. La
-    // sub-pestaña "todas/con/sin cálculo" (fpills) sigue siendo exclusiva del
-    // tab Resultado (solo oculta/muestra tarjetas), pero sus CONTEOS ahora
-    // reflejan el subconjunto ya filtrado, no el total original.
+    // Único punto de recálculo: combina texto + producto + cliente + estado
+    // (subsetFiltrado) y re-renderiza las 3 pestañas con ESE subconjunto — el
+    // fpill activo filtra Resultado/Análisis/Resumen igual que las otras
+    // dimensiones. Los CONTEOS de los propios fpills se calculan aparte, sobre
+    // subsetSinEstado() (texto+producto+cliente, SIN el estado activo), para
+    // que sigan mostrando la cuenta real de las 4 categorías sin impórtar cuál
+    // esté seleccionada (si no, al pararse en "Con desperdicio" las otras 3
+    // pills quedarían siempre en 0).
     function aplicarBusqueda() {
-        const subset = subsetFiltrado();
+        const baseSinEstado = subsetSinEstado();
+        const subset = filtroActivo === 'todas'
+            ? baseSinEstado
+            : baseSinEstado.filter(o => estadoOrden(o) === filtroActivo);
         const opsMatch = new Set(subset.map(o => o.op));
         renderChips();
 
-        // Contadores de los fpills, sobre el subconjunto filtrado.
-        const con = subset.filter(o => o.tiene_calculo).length;
-        document.getElementById('fpill-todas').textContent = `Todas · ${subset.length}`;
+        // Contadores de los fpills, sobre baseSinEstado (texto+producto+
+        // cliente). "sindesp" (% == 0, ya calculado) es presentación pura: no
+        // afecta el ponderado, que sigue viviendo en calcularKPIs()/agrupar()
+        // sin cambios.
+        const con = baseSinEstado.filter(o => o.tiene_calculo && o.pct > 0).length;
+        const sindesp = baseSinEstado.filter(o => o.tiene_calculo && o.pct === 0).length;
+        document.getElementById('fpill-todas').textContent = `Todas · ${baseSinEstado.length}`;
         document.getElementById('fpill-con').textContent = `Con desperdicio · ${con}`;
-        document.getElementById('fpill-sin').textContent = `Sin cálculo · ${subset.length - con}`;
+        document.getElementById('fpill-sindesp').textContent = `Sin desperdicio · ${sindesp}`;
+        document.getElementById('fpill-sin').textContent = `Sin cálculo · ${baseSinEstado.length - con - sindesp}`;
 
-        // Resultado: tarjetas ya existentes en el DOM, solo se ocultan/muestran.
+        // Resultado: tarjetas ya existentes en el DOM, solo se ocultan/muestran
+        // (opsMatch ya incluye el filtro de estado, no hace falta repetirlo).
         let visibles = 0;
         secciones.forEach(sec => {
             const op = Number(sec.dataset.op);
-            const pasaFiltro = (filtroActivo === 'todas' || sec.dataset.estado === filtroActivo);
-            const mostrar = pasaFiltro && opsMatch.has(op);
+            const mostrar = opsMatch.has(op);
             sec.style.display = mostrar ? '' : 'none';
             if (mostrar) visibles++;
         });

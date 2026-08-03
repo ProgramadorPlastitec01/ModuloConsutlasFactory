@@ -12,9 +12,21 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
     {% block head_extra %}{% endblock %}
 </head>
-<body class="app">
+
+<body class="app" style="margin-top: 23px;">
+    <div style="    background-color: #ff7600;
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    color: whitesmoke;
+    font-weight: bolder;
+    height: 20px;
+    z-index: 19;
+    text-align: center;">-- MODULO DE PRUEBAS --</div>
 
 <aside class="side">
+    
     <div class="brand">
         <div class="logo">F</div>
         <div>
@@ -33,6 +45,7 @@
     <a class="nav-item {{ 'active' if p.startswith('/admin/usuarios') }}" href="{{ url_for('admin_usuarios') }}">{{ ui.icon('usuarios') }}Usuarios</a>
     <a class="nav-item {{ 'active' if p.startswith('/admin/clientes') }}" href="{{ url_for('admin_clientes') }}">{{ ui.icon('clientes') }}Clientes</a>
     {% endif %}
+
 
     <div class="foot">
         <div class="avatar">{{ (session.usuario or '?')[:2]|upper }}</div>

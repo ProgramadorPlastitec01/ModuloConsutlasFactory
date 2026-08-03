@@ -9,6 +9,7 @@ import pyodbc
 from dotenv import load_dotenv
 from flask import (
     Flask,
+    Response,
     jsonify,
     redirect,
     render_template,
@@ -560,20 +561,29 @@ def _fetch_dicts(cursor, sql, params):
 # Patrones para extraer "valor + unidad" de un texto tipo "DES X <valor>
 # <UND> ...". GENERALIZADO a CUALQUIER unidad (KG, UN, u otras de hasta 6
 # letras), no solo KG: la unidad es un grupo opcional/capturado, no literal.
+# El token de desperdicio acepta "DES" o "DS" (sin la E) — dato de planta:
+# en algunas notas lo escriben abreviado, p. ej. "DS X 613.69 K" (confirmado
+# con negocio; el valor sigue siendo el desperdicio real, solo cambia cómo lo
+# tipean). "\b" antes del token evita matchear "DS"/"DES" como sufijo de otra
+# palabra (p. ej. no debe dispararse dentro de una palabra que termine en esas
+# letras). La unidad ya era genérica (1-6 letras) y por eso "K" (sin la G) ya
+# entra sin cambios adicionales — solo importa para Kardex/farma, la nota
+# siempre se trata como kg sin mirar la unidad (ver _parse_desperdicio_nota).
 # Se intentan en orden y se usa el primero que matchee:
-#   1. "DES X <valor> <UND?> X"  (unidad opcional, con X de cierre) ->
+#   1. "(DES|DS) X <valor> <UND?> X"  (unidad opcional, con X de cierre) ->
 #      "DES X 136.12 KG X ...", "DES X 2488 UN X VARIOS 50743",
 #      "DES X 339.7 X" (sin unidad; el grupo opcional queda vacío)
-#   2. "DES X <valor> <UND>"     (SIN exigir X de cierre; fallback — la unidad
-#      es obligatoria aquí, es lo único que acota el número) ->
-#      "DES X 128 KG AJST ARRAN DESC PELUZA F 18"
+#   2. "(DES|DS) X <valor> <UND>"     (SIN exigir X de cierre; fallback — la
+#      unidad es obligatoria aquí, es lo único que acota el número) ->
+#      "DES X 128 KG AJST ARRAN DESC PELUZA F 18", "DS X 613.69 K" (sin X de
+#      cierre — este es el caso real que rescata la variante DS/K)
 # Este patrón lo reutilizan tanto la NOTA de la OP (_parse_desperdicio_nota,
 # que ignora la unidad: para la nota siempre es kg) como los movimientos
 # Kardex de la regla farmacéutica (_sumar_kardex_farmaceutico, que sí necesita
 # la unidad real del movimiento, p. ej. "UN").
 NOTA_DESPERDICIO_PATRONES = (
-    re.compile(r"DES\s*X\s*([\d.,]+)\s*([A-Za-z]{1,6})?\s*X", re.IGNORECASE),
-    re.compile(r"DES\s*X\s*([\d.,]+)\s*([A-Za-z]{1,6})\b", re.IGNORECASE),
+    re.compile(r"\b(?:DES|DS)\s*X\s*([\d.,]+)\s*([A-Za-z]{1,6})?\s*X", re.IGNORECASE),
+    re.compile(r"\b(?:DES|DS)\s*X\s*([\d.,]+)\s*([A-Za-z]{1,6})\b", re.IGNORECASE),
 )
 
 
@@ -827,26 +837,46 @@ def _calcular_desperdicio(nota, suma_cant1, n_filas_2a):
     antes de dividir. Devuelve un dict con los datos para la vista, incluyendo
     una alerta cuando no es posible calcular.
 
+    DECISIÓN DE NEGOCIO (revierte parcialmente M2, confirmado con producción):
+    una orden con consumo real (suma_cant1 > 0) y NOTA VACÍA/ausente es un 0%
+    REAL — hubo producción sin desperdicio registrado, no un hueco de dato.
+    Se distingue de una NOTA con TEXTO que no coincide con los patrones
+    conocidos (formato no soportado todavía, p. ej. abreviatura de planta no
+    contemplada): esa sí puede esconder desperdicio real y sigue "sin
+    cálculo" — solo la nota VACÍA se asume 0%, nunca un texto no reconocido.
+
     Esta es la regla por defecto; el punto de entrada por orden es
     _calcular_desperdicio_producto, que selecciona la regla según el producto.
     """
     valor_nota = _parse_desperdicio_nota(nota)
     suma_f = float(suma_cant1) if suma_cant1 is not None else 0.0
+    nota_vacia = nota is None or not str(nota).strip()
 
     resultado = {
         "valor_nota": valor_nota,
         "suma_cant1": suma_cant1,
         "porcentaje": None,
         "alerta": None,
+        "num_ponderado": None,
+        "den_ponderado": None,
     }
-    if valor_nota is None:
+    if valor_nota is None and not nota_vacia:
         resultado["alerta"] = "Formato de nota no encontrado"
         return resultado
     if n_filas_2a == 0 or suma_f <= 0:
         resultado["alerta"] = "Sin consumo (2A0/2A62) para calcular"
         return resultado
+    if valor_nota is None and nota_vacia:
+        # 0% real: entra al ponderado con num=0, den=consumo (ver decisión
+        # de negocio arriba).
+        resultado["porcentaje"] = 0.0
+        resultado["num_ponderado"] = 0.0
+        resultado["den_ponderado"] = suma_f
+        return resultado
 
     resultado["porcentaje"] = round((float(valor_nota) / suma_f) * 100, 2)
+    resultado["num_ponderado"] = valor_nota
+    resultado["den_ponderado"] = suma_cant1
     return resultado
 
 
@@ -884,18 +914,22 @@ def _regla_nota(ctx):
     """
     Regla GENERAL (manga 2A03, ducto 2A04, película 2A10 y demás): el
     desperdicio se LEE de la nota. Adapta _calcular_desperdicio (que NO se
-    toca) al contrato de contexto y agrega los campos canónicos.
+    toca en su firma, solo se le agregó el caso 0% real) al contrato de
+    contexto y agrega los campos canónicos.
+
+    num_ponderado/den_ponderado/porcentaje ya vienen resueltos por
+    _calcular_desperdicio para los 3 casos (parseada, 0% real por nota vacía,
+    o sin cálculo) — aquí NO se recalculan para no perder el caso 0% real
+    (valor_nota es None en ese caso, pero num_ponderado sí está en 0.0).
     """
     res = _calcular_desperdicio(ctx.get("nota"), ctx.get("suma_cant1"),
                                 ctx.get("n_filas_2a"))
     res["metodo"] = "nota"
-    res["desperdicio_kg"] = res.get("valor_nota")
+    # desperdicio_kg: valor_nota si fue parseada; 0.0 en el caso 0% real
+    # (porcentaje calculado pero sin valor_nota); None si sigue sin cálculo.
+    res["desperdicio_kg"] = (res.get("valor_nota") if res.get("valor_nota") is not None
+                             else (0.0 if res.get("porcentaje") is not None else None))
     res["unidad"] = "KG"
-    # Entra al ponderado con num = kg de la nota, den = consumo (2A0%+2A62%).
-    # El gate den > 0 lo aplica cada punto de agregación (excluye consumo 0 y
-    # órdenes sin nota, igual que antes).
-    res["num_ponderado"] = res.get("valor_nota")
-    res["den_ponderado"] = res.get("suma_cant1")
     return res
 
 
@@ -2228,6 +2262,239 @@ def ordenes_produccion_reporte_pdf():
 
     nombre = f"reporte_desperdicio_{datetime.now():%Y%m%d_%H%M}.pdf"
     return send_file(pdf, as_attachment=True, download_name=nombre, mimetype="application/pdf")
+
+
+# =============================================================================
+# DIAGNÓSTICO DE SOLO LECTURA (temporal) — impacto del 0% real + insumo para
+# la futura regla producto→consume.
+#
+# NADA de esto toca _calcular_desperdicio, las reglas por prefijo, el motor JS
+# ni el export: reutiliza tal cual el resultado de _consultar_ordenes (la
+# MISMA función que usa /ordenes-produccion/consultar) y solo lo reclasifica
+# para el reporte. No persiste nada, no cambia ninguna respuesta existente.
+# =============================================================================
+
+def _diagnostico_bucket_nota(cab, desp):
+    """
+    Clasifica una orden de la regla por NOTA que hoy queda "sin cálculo" en
+    uno de los 3 cubos del Bloque 1 (ver PROMPT de diagnóstico):
+      'a' -> consumo real > 0 y NOTA vacía/ausente: candidata a "0% real".
+      'b' -> NOTA con contenido pero NO parseable por los patrones actuales
+             (formato desconocido; es responsabilidad nuestra, no es 0%).
+      'c' -> sin consumo (op1 vacío o consumo=0): hueco de dato.
+    Solo lectura: no reevalúa el parseo, se apoya en lo que YA calculó
+    _calcular_desperdicio (desp["suma_cant1"] ya viene seteado siempre, tenga
+    o no NOTA parseable).
+    """
+    nota_cruda = cab.get("NOTA")
+    nota_vacia = nota_cruda is None or not str(nota_cruda).strip()
+    consumo = desp.get("suma_cant1")
+    consumo_val = float(consumo) if consumo is not None else 0.0
+    if nota_vacia:
+        return "a" if consumo_val > 0 else "c"
+    return "b"
+
+
+def _generar_diagnostico(ordenes, filtro):
+    """
+    Arma el reporte de texto de los 3 bloques a partir de `ordenes`, el
+    resultado YA calculado por _consultar_ordenes (mismas reglas, mismo
+    desperdicio por orden que ve la vista real). Reporte puramente
+    informativo — nadie más debe consumir este texto para calcular nada.
+    """
+    lineas = []
+
+    def out(s=""):
+        lineas.append(s)
+
+    out("=" * 78)
+    out("DIAGNÓSTICO DE SOLO LECTURA — no altera ningún cálculo real")
+    out("=" * 78)
+    if filtro:
+        if filtro.get("modo") == "orden":
+            out(f"Filtro: órdenes (OP) = {filtro.get('ordenes')}")
+        else:
+            out(f"Filtro: producto {filtro.get('cod')} · {filtro.get('fecha_desde')} a {filtro.get('fecha_hasta')}")
+    out(f"Total de órdenes en el resultado: {len(ordenes)}")
+    out()
+
+    # --- BLOQUE 1: clasificación de las "sin cálculo" ----------------------
+    out("-" * 78)
+    out("BLOQUE 1 — Clasificación de las órdenes 'sin cálculo'")
+    out("-" * 78)
+    cubo_a, cubo_b, cubo_c = [], [], []
+    otras_sin_calculo = []  # 2A02 / kardex: no usan NOTA, no aplican a/b/c
+    for orden in ordenes:
+        d = orden.get("desperdicio") or {}
+        if d.get("porcentaje") is not None:
+            continue
+        cab = orden.get("cabecera") or {}
+        metodo = d.get("metodo")
+        if metodo == "nota":
+            cubo = _diagnostico_bucket_nota(cab, d)
+            (cubo_a if cubo == "a" else cubo_b if cubo == "b" else cubo_c).append(orden)
+        else:
+            otras_sin_calculo.append(orden)
+
+    total_sin = len(cubo_a) + len(cubo_b) + len(cubo_c) + len(otras_sin_calculo)
+    out(f"Total 'sin cálculo': {total_sin}")
+    out(f"  (a) Consumo>0 y sin NOTA -> candidatas a 0% real : {len(cubo_a)}")
+    out(f"  (b) NOTA presente pero NO parseable (formato desconocido) : {len(cubo_b)}")
+    out(f"  (c) Sin consumo (hueco de dato) : {len(cubo_c)}")
+    if otras_sin_calculo:
+        out(f"  Otras reglas (2A02/kardex, no usan NOTA) : {len(otras_sin_calculo)}")
+        por_alerta = {}
+        for orden in otras_sin_calculo:
+            d = orden["desperdicio"]
+            clave = f"{d.get('metodo')}: {d.get('alerta')}"
+            por_alerta.setdefault(clave, []).append(orden["op"])
+        for clave, ops in por_alerta.items():
+            extra = " ..." if len(ops) > 10 else ""
+            out(f"    - {clave} ({len(ops)} orden(es)): OP {ops[:10]}{extra}")
+
+    if cubo_b:
+        out()
+        out("Ejemplos del cubo (b) — NOTA cruda no parseable (hasta 15):")
+        for orden in cubo_b[:15]:
+            cab = orden.get("cabecera") or {}
+            out(f"  OP {orden['op']!s:>8}  COD {cab.get('COD')!s:<14}  NOTA={cab.get('NOTA')!r}")
+    out()
+
+    # --- BLOQUE 2: impacto en el ponderado (actual vs. con 0% real) --------
+    out("-" * 78)
+    out("BLOQUE 2 — Impacto en el % ponderado (ACTUAL vs. CON 0% REAL)")
+    out("-" * 78)
+    out("CON 0% REAL solo agrega las órdenes del cubo (a): numerador 0, "
+        "denominador = su consumo real ya calculado (suma_cant1). Los cubos "
+        "(b) y (c) NO se tocan (dato malo o inexistente, no un 0% real).")
+    out()
+
+    por_producto = {}
+
+    def _grupo(cod, nom):
+        g = por_producto.get(cod)
+        if g is None:
+            g = por_producto[cod] = {
+                "nom": nom, "num_a": 0.0, "den_a": 0.0,
+                "num_b": 0.0, "den_b": 0.0, "n_add": 0,
+            }
+        return g
+
+    num_actual = den_actual = 0.0
+    num_nuevo = den_nuevo = 0.0
+    for orden in ordenes:
+        d = orden.get("desperdicio") or {}
+        cab = orden.get("cabecera") or {}
+        cod = str(cab.get("COD") or "—").strip()
+        g = _grupo(cod, cab.get("NOM"))
+        num, den = d.get("num_ponderado"), d.get("den_ponderado")
+        if num is not None and den is not None and float(den) > 0:
+            num_actual += float(num); den_actual += float(den)
+            num_nuevo += float(num); den_nuevo += float(den)
+            g["num_a"] += float(num); g["den_a"] += float(den)
+            g["num_b"] += float(num); g["den_b"] += float(den)
+
+    for orden in cubo_a:
+        d = orden.get("desperdicio") or {}
+        cab = orden.get("cabecera") or {}
+        cod = str(cab.get("COD") or "—").strip()
+        g = _grupo(cod, cab.get("NOM"))
+        consumo = float(d.get("suma_cant1") or 0.0)
+        den_nuevo += consumo
+        g["den_b"] += consumo
+        g["n_add"] += 1
+
+    pct_actual = round(num_actual / den_actual * 100, 2) if den_actual > 0 else None
+    pct_nuevo = round(num_nuevo / den_nuevo * 100, 2) if den_nuevo > 0 else None
+    delta_global = (round(pct_nuevo - pct_actual, 2)
+                    if (pct_actual is not None and pct_nuevo is not None) else None)
+    out(f"GLOBAL   actual={pct_actual}%   con_0%_real={pct_nuevo}%   "
+        f"Δ={delta_global}   (+{len(cubo_a)} orden(es) en 0%)")
+    out()
+    out(f"{'Producto':<16}{'%actual':>10}{'%con_0%':>10}{'Δ':>8}{'+ órdenes 0%':>14}")
+    for cod, g in sorted(por_producto.items(), key=lambda kv: -kv[1]["n_add"]):
+        pa = round(g["num_a"] / g["den_a"] * 100, 2) if g["den_a"] > 0 else None
+        pb = round(g["num_b"] / g["den_b"] * 100, 2) if g["den_b"] > 0 else None
+        delta = round(pb - pa, 2) if (pa is not None and pb is not None) else None
+        out(f"{cod:<16}{(str(pa) + '%') if pa is not None else '—':>10}"
+            f"{(str(pb) + '%') if pb is not None else '—':>10}"
+            f"{delta if delta is not None else '—':>8}{g['n_add']:>14}")
+    out()
+
+    # --- BLOQUE 3: qué consume realmente cada producto ---------------------
+    out("-" * 78)
+    out("BLOQUE 3 — Qué consume realmente cada producto (insumo para la regla")
+    out("           producto→consume; esto NO es la regla, es solo evidencia)")
+    out("-" * 78)
+    consumo_por_prefijo = {}
+    for orden in ordenes:
+        cab = orden.get("cabecera") or {}
+        d = orden.get("desperdicio") or {}
+        cod_prod = str(cab.get("COD") or "").strip()
+        prefijo_prod = cod_prod[:4] if cod_prod else "—"
+        filas = orden.get("detalle") or []
+        fuente = "op1"
+        if not filas and d.get("metodo") == "kardex":
+            filas = orden.get("detalle_kardex") or []
+            fuente = "kardex (solo filas DES X — ver nota abajo)"
+        grupo = consumo_por_prefijo.setdefault(prefijo_prod, {"fuente": fuente, "prefijos": {}})
+        for fila in filas:
+            cod_consumido = str(fila.get("COD") or "").strip()
+            if not cod_consumido:
+                continue
+            pref_consumido = cod_consumido[:4]
+            info = grupo["prefijos"].setdefault(pref_consumido, {"n": 0, "ejemplos": set()})
+            info["n"] += 1
+            if len(info["ejemplos"]) < 5:
+                info["ejemplos"].add(cod_consumido)
+
+    for prefijo_prod, grupo in sorted(consumo_por_prefijo.items()):
+        out(f"Producto {prefijo_prod} (detalle vía {grupo['fuente']}):")
+        if not grupo["prefijos"]:
+            out("    (sin filas de detalle observadas en esta muestra)")
+            continue
+        for pref_cons, info in sorted(grupo["prefijos"].items(), key=lambda kv: -kv[1]["n"]):
+            out(f"    consume {pref_cons}%  ({info['n']} fila(s))  ejemplos: {sorted(info['ejemplos'])}")
+    out()
+    out("NOTA sobre farma (Kardex): el detalle disponible son las filas 'DES X' "
+        "(desperdicio), no un consumo de insumos tipo BOM como en extrusión. El "
+        "COD de esas filas no es directamente comparable al 'producto→consume' "
+        "de op1 — se reporta igual como evidencia cruda, pero hace falta "
+        "criterio de negocio adicional antes de usarlo para diseñar la regla.")
+    out("=" * 78)
+
+    return "\n".join(lineas)
+
+
+@app.route("/diagnostico", methods=["GET"])
+@admin_required
+def diagnostico():
+    """
+    Diagnóstico de SOLO LECTURA (temporal, sin persistencia): reutiliza el
+    MISMO filtro y la MISMA _consultar_ordenes que /ordenes-produccion, y solo
+    reclasifica el resultado ya calculado para un reporte en texto plano — no
+    toca _calcular_desperdicio, ninguna regla, el motor JS ni el export.
+
+    Uso (repetir una vez por prefijo para muestrear varios productos):
+      /diagnostico?cod=2A03&fecha_desde=2026-07-01&fecha_hasta=2026-07-30
+      /diagnostico?modo=orden&ordenes[]=436615
+    """
+    if not request.args:
+        return (
+            "Uso: /diagnostico?cod=2A03&fecha_desde=YYYY-MM-DD&fecha_hasta=YYYY-MM-DD\n"
+            "(o /diagnostico?modo=orden&ordenes[]=NNNNNN). Mismo filtro que "
+            "/ordenes-produccion/consultar — solo lectura, no cambia nada."
+        ), 200, {"Content-Type": "text/plain; charset=utf-8"}
+    try:
+        ordenes = _consultar_ordenes(request.args)
+    except ValueError as exc:
+        return f"Filtro inválido: {exc}", 400
+    except Exception as exc:
+        return f"Error al consultar la base de datos: {exc}", 500
+
+    filtro = _extraer_filtro(request.args)
+    reporte = _generar_diagnostico(ordenes, filtro)
+    return Response(reporte, mimetype="text/plain; charset=utf-8")
 
 
 if __name__ == "__main__":
