@@ -569,21 +569,34 @@ def _fetch_dicts(cursor, sql, params):
 # letras). La unidad ya era genérica (1-6 letras) y por eso "K" (sin la G) ya
 # entra sin cambios adicionales — solo importa para Kardex/farma, la nota
 # siempre se trata como kg sin mirar la unidad (ver _parse_desperdicio_nota).
+#
+# La "X" inmediatamente después de DES/DS es OPCIONAL ("DES 58 KG X" -> 58,
+# dato de planta: no siempre la tipean) y el número tolera espacio alrededor
+# del separador decimal ("DES X 45 .5 KG X" -> 45.5, ver _NUM_PATRON). Ambos
+# ajustes son PURAMENTE de tolerancia de formato: no cambian qué se considera
+# un desperdicio válido, solo qué tan laxo es el tipeo aceptado.
+#
 # Se intentan en orden y se usa el primero que matchee:
-#   1. "(DES|DS) X <valor> <UND?> X"  (unidad opcional, con X de cierre) ->
+#   1. "(DES|DS) [X] <valor> <UND?> X"  (unidad opcional, con X de cierre) ->
 #      "DES X 136.12 KG X ...", "DES X 2488 UN X VARIOS 50743",
 #      "DES X 339.7 X" (sin unidad; el grupo opcional queda vacío)
-#   2. "(DES|DS) X <valor> <UND>"     (SIN exigir X de cierre; fallback — la
+#   2. "(DES|DS) [X] <valor> <UND>"     (SIN exigir X de cierre; fallback — la
 #      unidad es obligatoria aquí, es lo único que acota el número) ->
 #      "DES X 128 KG AJST ARRAN DESC PELUZA F 18", "DS X 613.69 K" (sin X de
 #      cierre — este es el caso real que rescata la variante DS/K)
 # Este patrón lo reutilizan tanto la NOTA de la OP (_parse_desperdicio_nota,
 # que ignora la unidad: para la nota siempre es kg) como los movimientos
 # Kardex de la regla farmacéutica (_sumar_kardex_farmaceutico, que sí necesita
-# la unidad real del movimiento, p. ej. "UN").
+# la unidad real del movimiento, p. ej. "UN"). Validado (ver test de
+# regresión) que aflojar la X/el decimal NO cambia el parseo farma real (OP
+# 462854, "DES X 373 UN X VARIOS" -> 373 UN, idéntico); si algún día un caso
+# farma real SÍ cambiara, hay que separar un patrón propio para Kardex en vez
+# de seguir compartiendo estas constantes.
+_NUM_PATRON = r"\d+(?:\s*[.,]\s*\d+)?"
+
 NOTA_DESPERDICIO_PATRONES = (
-    re.compile(r"\b(?:DES|DS)\s*X\s*([\d.,]+)\s*([A-Za-z]{1,6})?\s*X", re.IGNORECASE),
-    re.compile(r"\b(?:DES|DS)\s*X\s*([\d.,]+)\s*([A-Za-z]{1,6})\b", re.IGNORECASE),
+    re.compile(rf"\b(?:DES|DS)\s*(?:X\s*)?({_NUM_PATRON})\s*([A-Za-z]{{1,6}})?\s*X", re.IGNORECASE),
+    re.compile(rf"\b(?:DES|DS)\s*(?:X\s*)?({_NUM_PATRON})\s*([A-Za-z]{{1,6}})\b", re.IGNORECASE),
 )
 
 
@@ -604,12 +617,13 @@ def _parse_desperdicio_valor_unidad(texto):
             break
     if not m:
         return None, None
-    # El valor puede venir con punto ("23.5") o coma decimal manual ("23,5").
-    # Se normaliza a punto sin romper ninguno de los dos formatos. Los valores
-    # son < 1000 con punto decimal, así que NO se manejan separadores de miles;
-    # si por robustez llegaran ambos separadores, se prioriza el punto como
-    # decimal y se descartan las comas (evita que float() falle y devuelva None).
-    crudo = m.group(1).strip()
+    # El valor puede venir con punto ("23.5"), coma decimal manual ("23,5") o
+    # espacio alrededor del separador ("23 .5", "23. 5") — se quita TODO
+    # espacio interno antes de normalizar el separador. Los valores son < 1000
+    # con punto decimal, así que NO se manejan separadores de miles; si por
+    # robustez llegaran ambos separadores, se prioriza el punto como decimal y
+    # se descartan las comas (evita que float() falle y devuelva None).
+    crudo = re.sub(r"\s+", "", m.group(1).strip())
     if "." in crudo:
         crudo = crudo.replace(",", "")
     else:
@@ -821,6 +835,40 @@ def _sumar_kardex_farmaceutico(cursor, op, fecha_t):
     return num, den, n_filas_des, n_usadas, unidad_comun, filas_des, tabla
 
 
+# Detecta si una nota tiene una construcción "DES/DS [X] <dígito>" (intento
+# REAL de registrar un desperdicio), no cualquier subcadena que empiece
+# igual — crítico para no dispararse con "DESASIGNACION" (ni "50679
+# DESASIGNACION POR REIMPRESION"): tras el token exige, sin nada más que un
+# "X" opcional y espacios de por medio, un dígito; "DESASIGNACION" sigue con
+# letras ("ASIGNACION...", sin dígito inmediato) y por eso NO matchea. Se usa
+# SOLO para clasificar en _calcular_desperdicio (bucket (e) vs (b)), nunca
+# para extraer el valor (eso es _parse_desperdicio_nota).
+_TOKEN_DESPERDICIO_PATRON = re.compile(r"\b(?:DES|DS)\s*X?\s*\d", re.IGNORECASE)
+
+
+def _nota_tiene_token_desperdicio(nota):
+    """True si `nota` contiene una construcción "DES/DS [X] <dígito>"."""
+    if not nota:
+        return False
+    return bool(_TOKEN_DESPERDICIO_PATRON.search(str(nota)))
+
+
+# Detecta si el valor PEGADO a DES/DS es una DIMENSIÓN tipo "150*16.5" (error
+# de captura de planta: alguien anotó unas medidas donde iba el desperdicio,
+# no un desperdicio real). El ancla es al token DES/DS mismo (como el resto
+# de estos patrones) — por diseño NO es una búsqueda libre de "num*num" en
+# toda la nota, así "DES X 325 KG X ... 150*16.5" (con el "150*16.5" suelto,
+# no pegado a ningún DES/DS) sigue parseando 325 normalmente.
+_DIMENSION_PEGADA_PATRON = re.compile(r"\b(?:DES|DS)\s*(?:X\s*)?\d+\s*\*\s*\d", re.IGNORECASE)
+
+
+def _nota_valor_es_dimension(nota):
+    """True si el valor pegado a DES/DS en `nota` es una dimensión "num*num"."""
+    if not nota:
+        return False
+    return bool(_DIMENSION_PEGADA_PATRON.search(str(nota)))
+
+
 def _calcular_desperdicio(nota, suma_cant1, n_filas_2a):
     """
     Regla GENERAL de cálculo del porcentaje de desperdicio:
@@ -837,46 +885,81 @@ def _calcular_desperdicio(nota, suma_cant1, n_filas_2a):
     antes de dividir. Devuelve un dict con los datos para la vista, incluyendo
     una alerta cuando no es posible calcular.
 
-    DECISIÓN DE NEGOCIO (revierte parcialmente M2, confirmado con producción):
-    una orden con consumo real (suma_cant1 > 0) y NOTA VACÍA/ausente es un 0%
-    REAL — hubo producción sin desperdicio registrado, no un hueco de dato.
-    Se distingue de una NOTA con TEXTO que no coincide con los patrones
-    conocidos (formato no soportado todavía, p. ej. abreviatura de planta no
-    contemplada): esa sí puede esconder desperdicio real y sigue "sin
-    cálculo" — solo la nota VACÍA se asume 0%, nunca un texto no reconocido.
+    CLASIFICACIÓN (confirmada con negocio; revierte parcialmente M2), en este
+    ORDEN EXACTO:
+      - Sin consumo real (suma_cant1 <= 0): SIN CÁLCULO — hueco de dato, no
+        importa la nota (ni vacía ni con texto cambia esto).
+      - Con consumo > 0:
+        (a) nota vacía/solo espacios -> 0% REAL: hubo producción, no se
+            registró desperdicio.
+        (c) el valor pegado a DES/DS es una DIMENSIÓN ("150*16.5") -> 0% REAL:
+            es un error de captura de planta (midieron, no reportaron
+            desperdicio), se evalúa ANTES de parsear para que tolerar el
+            número no termine capturando el "150" de la dimensión.
+        (d) la nota parsea a un valor -> desperdicio = valor/consumo (igual
+            que siempre).
+        (e) la nota SÍ tiene un token DES/DS + dígito pero no logramos
+            leerlo (no es dimensión, no parseó) -> SIN CÁLCULO + alerta
+            "revisar": RED DE SEGURIDAD anti-enmascaramiento — esa nota
+            puede esconder desperdicio real en un formato que no soportamos
+            todavía (p. ej. el histórico "DS X 613.69"), así que NUNCA se
+            fuerza a 0%.
+        (b) cualquier otro texto sin token DES/DS (notas operativas: "CONS F
+            18101 150*16.5", nombre de cliente, etc.) -> 0% REAL: la nota no
+            intenta registrar un desperdicio, se interpreta igual que vacía.
 
     Esta es la regla por defecto; el punto de entrada por orden es
     _calcular_desperdicio_producto, que selecciona la regla según el producto.
     """
-    valor_nota = _parse_desperdicio_nota(nota)
     suma_f = float(suma_cant1) if suma_cant1 is not None else 0.0
     nota_vacia = nota is None or not str(nota).strip()
 
     resultado = {
-        "valor_nota": valor_nota,
+        "valor_nota": None,
         "suma_cant1": suma_cant1,
         "porcentaje": None,
         "alerta": None,
         "num_ponderado": None,
         "den_ponderado": None,
     }
-    if valor_nota is None and not nota_vacia:
-        resultado["alerta"] = "Formato de nota no encontrado"
-        return resultado
+
     if n_filas_2a == 0 or suma_f <= 0:
         resultado["alerta"] = "Sin consumo (2A0/2A62) para calcular"
         return resultado
-    if valor_nota is None and nota_vacia:
-        # 0% real: entra al ponderado con num=0, den=consumo (ver decisión
-        # de negocio arriba).
+
+    if nota_vacia:
+        # (a) 0% real.
         resultado["porcentaje"] = 0.0
         resultado["num_ponderado"] = 0.0
         resultado["den_ponderado"] = suma_f
         return resultado
 
-    resultado["porcentaje"] = round((float(valor_nota) / suma_f) * 100, 2)
-    resultado["num_ponderado"] = valor_nota
-    resultado["den_ponderado"] = suma_cant1
+    if _nota_valor_es_dimension(nota):
+        # (c) 0% real: dimensión pegada a DES/DS, error de captura.
+        resultado["porcentaje"] = 0.0
+        resultado["num_ponderado"] = 0.0
+        resultado["den_ponderado"] = suma_f
+        return resultado
+
+    valor_nota = _parse_desperdicio_nota(nota)
+    resultado["valor_nota"] = valor_nota
+
+    if valor_nota is not None:
+        # (d) nota parseada normalmente.
+        resultado["porcentaje"] = round((float(valor_nota) / suma_f) * 100, 2)
+        resultado["num_ponderado"] = valor_nota
+        resultado["den_ponderado"] = suma_cant1
+        return resultado
+
+    if _nota_tiene_token_desperdicio(nota):
+        # (e) red de seguridad: NO forzar a 0%, queda sin cálculo.
+        resultado["alerta"] = "Formato de nota no encontrado (revisar)"
+        return resultado
+
+    # (b) 0% real: texto sin token de desperdicio.
+    resultado["porcentaje"] = 0.0
+    resultado["num_ponderado"] = 0.0
+    resultado["den_ponderado"] = suma_f
     return resultado
 
 
@@ -918,9 +1001,10 @@ def _regla_nota(ctx):
     contexto y agrega los campos canónicos.
 
     num_ponderado/den_ponderado/porcentaje ya vienen resueltos por
-    _calcular_desperdicio para los 3 casos (parseada, 0% real por nota vacía,
-    o sin cálculo) — aquí NO se recalculan para no perder el caso 0% real
-    (valor_nota es None en ese caso, pero num_ponderado sí está en 0.0).
+    _calcular_desperdicio para sus 5 casos (a-e: nota vacía, dimensión
+    pegada, parseada, sin token, o sin cálculo) — aquí NO se recalculan para
+    no perder los casos 0% real (valor_nota es None en (a)/(b)/(c), pero
+    num_ponderado sí está en 0.0).
     """
     res = _calcular_desperdicio(ctx.get("nota"), ctx.get("suma_cant1"),
                                 ctx.get("n_filas_2a"))
