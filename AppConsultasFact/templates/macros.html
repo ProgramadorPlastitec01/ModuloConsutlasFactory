@@ -56,8 +56,10 @@
 {% endmacro %}
 
 {# --- Regla de color del % de desperdicio (única fuente en el frontend) ---
-   < 10% verde (aceptable) · 10–15% amber (atención) · > 15% naranja (alto) #}
-{% macro nivel_pct(v) %}{% if v is none %}{% elif v < 10 %}verde{% elif v <= 15 %}amber{% else %}naranja{% endif %}{% endmacro %}
+   0% <= x < 5% verde (aceptable) · 5% <= x < 10% amber (atención) · x >= 10%
+   naranja (alto). UMBRALES ajustados (antes <10/10-15/>15); en paridad con
+   _nivel_desperdicio (app.py) y nivelDesperdicio (JS, ordenes_resultado.html). #}
+{% macro nivel_pct(v) %}{% if v is none %}{% elif v < 5 %}verde{% elif v < 10 %}amber{% else %}naranja{% endif %}{% endmacro %}
 
 {# Color de texto legible según el nivel (para cifras sobre fondo claro) #}
 {% macro nivel_color(v) %}

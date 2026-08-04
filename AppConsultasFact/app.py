@@ -1506,15 +1506,21 @@ def _tendencia_por_grupo(ordenes, orden_productos, agrupacion):
 
 
 # Regla de color del % de desperdicio (única fuente de verdad en backend):
-#   < 10%  -> verde (aceptable) · 10–15% -> amber (atención) · > 15% -> naranja
-# El macro Jinja `nivel_pct` replica esta regla para el HTML puro.
+#   0% <= x < 5%  -> verde (aceptable) · 5% <= x < 10% -> amber (atención) ·
+#   x >= 10%      -> naranja (alto)
+# UMBRALES ajustados (antes: <10 verde / 10-15 amber / >15 naranja) — los
+# colores en sí NO cambiaron, solo los cortes. 5% y 10% pertenecen al color
+# SUPERIOR (amber y naranja respectivamente); el 0% real sigue en verde.
+# El macro Jinja `nivel_pct` (macros.html) y el JS `nivelDesperdicio` (motor
+# de recálculo en vivo, ordenes_resultado.html) replican esta MISMA regla —
+# si se vuelve a tocar el umbral, actualizar los 3 en paridad.
 def _nivel_desperdicio(pct):
     """Devuelve 'verde' | 'amber' | 'naranja' según el % (None -> None)."""
     if pct is None:
         return None
-    if pct < 10:
+    if pct < 5:
         return "verde"
-    if pct <= 15:
+    if pct < 10:
         return "amber"
     return "naranja"
 

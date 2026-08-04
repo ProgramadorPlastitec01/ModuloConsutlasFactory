@@ -506,10 +506,12 @@
         return null;
     }
 
+    // Umbrales ajustados (antes <10 verde / 10-15 amber / >15 naranja) — en
+    // paridad con _nivel_desperdicio (app.py) y nivel_pct (macros.html).
     function nivelDesperdicio(pct) {
         if (pct === null || pct === undefined) return null;
-        if (pct < 10) return "verde";
-        if (pct <= 15) return "amber";
+        if (pct < 5) return "verde";
+        if (pct < 10) return "amber";
         return "naranja";
     }
 
