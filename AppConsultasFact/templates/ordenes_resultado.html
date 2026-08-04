@@ -268,7 +268,7 @@
             {% call ui.card('Desperdicio por producto', '% ponderado = Σ nota / Σ CANT1 × 100 · clic en una fila para ver sus órdenes', pad='0') %}
                 <div class="tabla-wrap" id="wrap-prod"{% if not (analisis and analisis.por_producto) %} hidden{% endif %}>
                     <table class="acordeon">
-                        <thead><tr><th>Producto</th><th class="num">Órdenes</th><th class="num">% Desperdicio</th></tr></thead>
+                        <thead><tr><th>Producto</th><th class="num th-sort" data-sub="prod" data-sort="ordenes">Órdenes<span class="th-arrow"></span></th><th class="num th-sort" data-sub="prod" data-sort="pct">% Desperdicio<span class="th-arrow"></span></th></tr></thead>
                         <tbody id="tbody-prod">
                             {% for f in analisis.por_producto %}
                             {% set miembros = [] %}
@@ -290,7 +290,7 @@
             {% call ui.card('Desperdicio por mes', 'orden cronológico · clic en una fila para ver sus órdenes', pad='0') %}
                 <div class="tabla-wrap" id="wrap-mes"{% if not (analisis and analisis.por_mes) %} hidden{% endif %}>
                     <table class="acordeon">
-                        <thead><tr><th>Mes</th><th class="num">Órdenes</th><th class="num">% Desperdicio</th></tr></thead>
+                        <thead><tr><th>Mes</th><th class="num th-sort" data-sub="mes" data-sort="ordenes">Órdenes<span class="th-arrow"></span></th><th class="num th-sort" data-sub="mes" data-sort="pct">% Desperdicio<span class="th-arrow"></span></th></tr></thead>
                         <tbody id="tbody-mes">
                             {% for f in analisis.por_mes %}
                             {% set miembros = [] %}
@@ -313,7 +313,7 @@
                 {% if analisis and analisis.por_cliente.disponible %}
                 <div class="tabla-wrap" id="wrap-cli"{% if not analisis.por_cliente.filas %} hidden{% endif %}>
                     <table class="acordeon">
-                        <thead><tr><th>Cliente</th><th class="num">Órdenes</th><th class="num">% Desperdicio</th></tr></thead>
+                        <thead><tr><th>Cliente</th><th class="num th-sort" data-sub="cli" data-sort="ordenes">Órdenes<span class="th-arrow"></span></th><th class="num th-sort" data-sub="cli" data-sort="pct">% Desperdicio<span class="th-arrow"></span></th></tr></thead>
                         <tbody id="tbody-cli">
                             {% for f in analisis.por_cliente.filas %}
                             {# Miembros del grupo: el backend anota `grupo_cliente`
@@ -348,13 +348,15 @@
             {% call ui.kpi('Órdenes encontradas', resumen.total, ico='lista', id='kpi-total') %}
                 <span class="chip neutral">{{ analisis.por_producto|length }} producto(s)</span>
             {% endcall %}
+            {# "Más alto"/"más bajo" son POR PRODUCTO (>= min_ordenes_kpi órdenes
+               con cálculo, ver _kpis_producto_extremos), no por orden individual. #}
             {% call ui.kpi('Desperdicio más alto', (resumen.max.porcentaje ~ '%') if resumen.max else '—',
                            color=ui.nivel_color(resumen.max.porcentaje)|trim if resumen.max else none, ico='sube', id='kpi-max') %}
-                {% if resumen.max %}<span class="chip up">OP {{ resumen.max.op }}</span>{% else %}<span class="chip neutral">sin % calculado</span>{% endif %}
+                {% if resumen.max %}<span class="chip up">{{ resumen.max.cod }} — {{ resumen.max.nom }} ({{ resumen.max.n_ordenes }} órdenes)</span>{% else %}<span class="chip neutral">sin producto con ≥{{ min_ordenes_kpi }} órdenes</span>{% endif %}
             {% endcall %}
             {% call ui.kpi('Desperdicio más bajo', (resumen.min.porcentaje ~ '%') if resumen.min else '—',
                            color=ui.nivel_color(resumen.min.porcentaje)|trim if resumen.min else none, ico='baja', id='kpi-min') %}
-                {% if resumen.min %}<span class="chip down">OP {{ resumen.min.op }}</span>{% else %}<span class="chip neutral">sin % calculado</span>{% endif %}
+                {% if resumen.min %}<span class="chip down">{{ resumen.min.cod }} — {{ resumen.min.nom }} ({{ resumen.min.n_ordenes }} órdenes)</span>{% else %}<span class="chip neutral">sin producto con ≥{{ min_ordenes_kpi }} órdenes</span>{% endif %}
             {% endcall %}
             {% call ui.kpi('Promedio ponderado', (resumen.promedio_ponderado ~ '%') if resumen.promedio_ponderado is not none else '—',
                            color=ui.nivel_color(resumen.promedio_ponderado)|trim, ico='reloj', id='kpi-promedio') %}
@@ -601,22 +603,110 @@
         });
     }
 
+    // =========================================================================
+    // Ordenamiento por columna en Análisis (solo presentación: reordena las
+    // filas de grupo ya calculadas, NO toca num/den/porcentaje ni el export).
+    // Estado independiente por sub-tab (prod/mes/cli). Ciclo de 3 clics por
+    // columna: desc -> asc -> natural (null/null, sin flecha). "Natural" es el
+    // orden que cada sub-tab produce hoy por defecto (ordenarPorProducto/Mes/
+    // Cliente sobre las filas RECIÉN agrupadas de este render) — se recibe ya
+    // calculado como `filasNaturales` y NO se recalcula aquí.
+    // =========================================================================
+    const sortState = {
+        prod: { col: null, dir: null },
+        mes: { col: null, dir: null },
+        cli: { col: null, dir: null },
+    };
+
+    function aplicarOrdenColumna(filasNaturales, estado) {
+        if (!estado || !estado.col) return filasNaturales;
+        const campo = estado.col === 'ordenes' ? 'n_ordenes' : 'porcentaje';
+        const factor = estado.dir === 'asc' ? 1 : -1;
+        return filasNaturales.slice().sort((a, b) => {
+            // Grupos sin % (sin cálculo en todo el grupo) SIEMPRE al final, en
+            // ambas direcciones — solo aplica a la columna "% Desperdicio"
+            // (n_ordenes nunca es nulo).
+            if (campo === 'porcentaje') {
+                const an = a.porcentaje === null, bn = b.porcentaje === null;
+                if (an !== bn) return an ? 1 : -1;
+                if (an && bn) return 0;
+            }
+            return (a[campo] - b[campo]) * factor;
+        });
+    }
+
+    function actualizarFlechasTH(sub) {
+        const st = sortState[sub];
+        document.querySelectorAll(`.th-sort[data-sub="${sub}"]`).forEach(th => {
+            const flecha = th.querySelector('.th-arrow');
+            if (st.col === th.dataset.sort) {
+                flecha.textContent = st.dir === 'desc' ? ' ▼' : ' ▲';
+            } else {
+                flecha.textContent = '';
+            }
+        });
+    }
+
+    // Umbral de órdenes CON CÁLCULO (den_ponderado>0) que debe alcanzar un
+    // producto para poder ganar los KPIs "más alto"/"más bajo" — descarta
+    // productos de prueba (1 sola OP con un % extremo) que distorsionarían el
+    // KPI. Puerto de MIN_ORDENES_KPI (app.py); mismo valor en ambos lados.
+    const MIN_ORDENES_KPI = 5;
+
+    // KPIs "más alto"/"más bajo" POR PRODUCTO (no por orden individual): entre
+    // los productos con >= MIN_ORDENES_KPI órdenes con cálculo, el de mayor/
+    // menor % ponderado (Σnum/Σden×100). Devuelve {max, min}, ambos null si
+    // ningún producto alcanza el umbral (nunca se baja el umbral ni se cae a
+    // un producto con menos órdenes). Puerto 1:1 de _kpis_producto_extremos.
+    function kpisProductoExtremos(ordenes, minOrdenes) {
+        minOrdenes = minOrdenes === undefined ? MIN_ORDENES_KPI : minOrdenes;
+        const grupos = new Map();
+        for (const o of ordenes) {
+            const cod = (o.cod || "").toString().trim() || "—";
+            let g = grupos.get(cod);
+            if (!g) { g = { cod, nom: (o.nombre || "").toString().trim(), nConCalculo: 0, num: 0, den: 0 }; grupos.set(cod, g); }
+            if (!g.nom && o.nombre) g.nom = o.nombre.toString().trim();
+            if (o.num_ponderado != null && o.den_ponderado != null && Number(o.den_ponderado) > 0) {
+                g.nConCalculo += 1;
+                g.num += Number(o.num_ponderado);
+                g.den += Number(o.den_ponderado);
+            }
+        }
+        const elegibles = [];
+        for (const g of grupos.values()) {
+            if (g.nConCalculo < minOrdenes) continue;
+            const porcentaje = porcentajePonderado(g.num, g.den);
+            if (porcentaje === null) continue;
+            elegibles.push({ cod: g.cod, nom: g.nom || "Sin nombre", n_ordenes: g.nConCalculo, porcentaje });
+        }
+        if (!elegibles.length) return { max: null, min: null };
+        let max = elegibles[0], min = elegibles[0];
+        for (const e of elegibles) {
+            if (e.porcentaje > max.porcentaje) max = e;
+            if (e.porcentaje < min.porcentaje) min = e;
+        }
+        return { max, min };
+    }
+
+    // Etiqueta compartida por Python (Jinja) y JS para los chips de los KPIs
+    // "más alto"/"más bajo": "COD — NOM (N órdenes)".
+    function etiquetaProductoKpi(p) {
+        return `${escapeHtml(p.cod)} — ${escapeHtml(p.nom)} (${p.n_ordenes} órdenes)`;
+    }
+
     // KPIs del tab Resumen: total, con desperdicio, sin cálculo, más alto/bajo
-    // (con su OP) y promedio ponderado global — mismo algoritmo que
-    // _resumen_ordenes.
+    // (por producto, ver kpisProductoExtremos) y promedio ponderado global —
+    // mismo algoritmo que _resumen_ordenes.
     function calcularKPIs(ordenes) {
-        let numTotal = 0, denTotal = 0, maxKpi = null, minKpi = null, con = 0;
+        let numTotal = 0, denTotal = 0, con = 0;
         for (const o of ordenes) {
             if (o.tiene_calculo) con += 1;
             if (o.num_ponderado != null && o.den_ponderado != null && Number(o.den_ponderado) > 0) {
                 numTotal += Number(o.num_ponderado);
                 denTotal += Number(o.den_ponderado);
             }
-            if (o.pct !== null && o.pct !== undefined) {
-                if (maxKpi === null || o.pct > maxKpi.porcentaje) maxKpi = { op: o.op, porcentaje: o.pct };
-                if (minKpi === null || o.pct < minKpi.porcentaje) minKpi = { op: o.op, porcentaje: o.pct };
-            }
         }
+        const { max: maxKpi, min: minKpi } = kpisProductoExtremos(ordenes);
         return {
             total: ordenes.length, con, sinCalculo: ordenes.length - con,
             max: maxKpi, min: minKpi,
@@ -784,11 +874,11 @@
         if (kpis.max) {
             valMax.textContent = formatoPct(kpis.max.porcentaje) + '%';
             valMax.style.color = nivelColorCss(kpis.max.porcentaje);
-            elMax.querySelector('.sub').innerHTML = `<span class="chip up">OP ${kpis.max.op}</span>`;
+            elMax.querySelector('.sub').innerHTML = `<span class="chip up">${etiquetaProductoKpi(kpis.max)}</span>`;
         } else {
             valMax.textContent = '—';
             valMax.style.color = 'var(--texto)';
-            elMax.querySelector('.sub').innerHTML = '<span class="chip neutral">sin % calculado</span>';
+            elMax.querySelector('.sub').innerHTML = `<span class="chip neutral">sin producto con ≥${MIN_ORDENES_KPI} órdenes</span>`;
         }
 
         const elMin = document.getElementById('kpi-min');
@@ -796,11 +886,11 @@
         if (kpis.min) {
             valMin.textContent = formatoPct(kpis.min.porcentaje) + '%';
             valMin.style.color = nivelColorCss(kpis.min.porcentaje);
-            elMin.querySelector('.sub').innerHTML = `<span class="chip down">OP ${kpis.min.op}</span>`;
+            elMin.querySelector('.sub').innerHTML = `<span class="chip down">${etiquetaProductoKpi(kpis.min)}</span>`;
         } else {
             valMin.textContent = '—';
             valMin.style.color = 'var(--texto)';
-            elMin.querySelector('.sub').innerHTML = '<span class="chip neutral">sin % calculado</span>';
+            elMin.querySelector('.sub').innerHTML = `<span class="chip neutral">sin producto con ≥${MIN_ORDENES_KPI} órdenes</span>`;
         }
 
         const elProm = document.getElementById('kpi-promedio');
@@ -1165,13 +1255,17 @@
         }
 
         // Análisis: las 3 sub-tablas, recalculadas del subconjunto filtrado.
+        // El orden NATURAL (porProducto/porMes/porCliente) se calcula primero
+        // y SIEMPRE, tal cual hoy; el orden de columna activo (sortState), si
+        // lo hay, se aplica encima con aplicarOrdenColumna — así el 3er clic
+        // (natural) siempre puede volver exactamente a este mismo orden.
         const porProducto = ordenarPorProducto(agrupar(subset, claveProducto));
         const porMes = ordenarPorMes(agrupar(subset, claveMes));
-        renderAnalisisTabla(porProducto, subset, claveProducto, 'tbody-prod', 'wrap-prod', 'empty-prod');
-        renderAnalisisTabla(porMes, subset, claveMes, 'tbody-mes', 'wrap-mes', 'empty-mes');
+        renderAnalisisTabla(aplicarOrdenColumna(porProducto, sortState.prod), subset, claveProducto, 'tbody-prod', 'wrap-prod', 'empty-prod');
+        renderAnalisisTabla(aplicarOrdenColumna(porMes, sortState.mes), subset, claveMes, 'tbody-mes', 'wrap-mes', 'empty-mes');
         if (CLIENTE_DISPONIBLE) {
             const porCliente = ordenarPorCliente(agrupar(subset, claveCliente));
-            renderAnalisisTabla(porCliente, subset, claveCliente, 'tbody-cli', 'wrap-cli', 'empty-cli');
+            renderAnalisisTabla(aplicarOrdenColumna(porCliente, sortState.cli), subset, claveCliente, 'tbody-cli', 'wrap-cli', 'empty-cli');
         }
 
         // Resumen: KPIs + Top 8 + tendencia/sparklines, mismo subconjunto.
@@ -1207,6 +1301,20 @@
         });
     });
     buscar.addEventListener('input', aplicarBusquedaDebounced);
+
+    // TH ordenables de Análisis (ver aplicarOrdenColumna/actualizarFlechasTH):
+    // ciclo de 3 clics desc -> asc -> natural, una sola columna a la vez.
+    document.querySelectorAll('.th-sort').forEach(th => {
+        th.addEventListener('click', () => {
+            const sub = th.dataset.sub, col = th.dataset.sort;
+            const st = sortState[sub];
+            if (st.col !== col) { st.col = col; st.dir = 'desc'; }
+            else if (st.dir === 'desc') { st.dir = 'asc'; }
+            else { st.col = null; st.dir = null; }
+            actualizarFlechasTH(sub);
+            aplicarBusqueda();
+        });
+    });
 
     // --- Acordeón del tab Análisis: desplegar el detalle de cada grupo ---
     // Delegado en document (no solo en las filas iniciales) para que también

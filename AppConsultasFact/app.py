@@ -1670,6 +1670,65 @@ def _fecha_orden(cab):
     return date.max
 
 
+# Umbral de órdenes CON CÁLCULO (den_ponderado > 0) que debe alcanzar un
+# producto para poder ganar los KPIs "Desperdicio más alto"/"más bajo" (ver
+# _kpis_producto_extremos). Decisión de negocio: descarta productos de
+# prueba/con muy pocas órdenes (1 sola OP con un % extremo) que distorsionan
+# el KPI — nombrada aparte para poder ajustarla fácil.
+MIN_ORDENES_KPI = 5
+
+
+def _kpis_producto_extremos(ordenes, min_ordenes=MIN_ORDENES_KPI):
+    """
+    KPIs "Desperdicio más alto"/"más bajo" POR PRODUCTO (ya no por orden
+    individual): agrupa por producto (mismo criterio que _productos_resumen)
+    y, entre los productos con AL MENOS `min_ordenes` órdenes CON CÁLCULO
+    (den_ponderado > 0 — no cuenta el total de órdenes del producto, solo las
+    que tienen base para el ponderado), devuelve el de mayor/menor % ponderado
+    (Σnum/Σden×100, el mismo que "Por producto"/"Top 8").
+
+    Si NINGÚN producto alcanza el umbral, devuelve (None, None) — el umbral
+    NUNCA se baja ni se cae a un producto con menos órdenes (así un producto
+    con una sola OP de prueba y un % extremo no puede ganar el KPI).
+
+    Devuelve (max, min), cada uno None o
+    {cod, nom, n_ordenes (=n_con_calculo), porcentaje}.
+    """
+    grupos = {}
+    for orden in ordenes:
+        cab = orden.get("cabecera") or {}
+        cod = (str(cab.get("COD")).strip() if cab.get("COD") is not None else "") or "—"
+        nom = str(cab.get("NOM")).strip() if cab.get("NOM") is not None else ""
+        desp = orden.get("desperdicio") or {}
+        g = grupos.get(cod)
+        if g is None:
+            g = grupos[cod] = {"cod": cod, "nom": nom, "n_con_calculo": 0, "num": 0.0, "den": 0.0}
+        if not g["nom"] and nom:
+            g["nom"] = nom
+        num, den = desp.get("num_ponderado"), desp.get("den_ponderado")
+        if num is not None and den is not None and float(den) > 0:
+            g["n_con_calculo"] += 1
+            g["num"] += float(num)
+            g["den"] += float(den)
+
+    elegibles = []
+    for g in grupos.values():
+        if g["n_con_calculo"] < min_ordenes:
+            continue
+        porcentaje = _porcentaje_ponderado(g["num"], g["den"])
+        if porcentaje is None:
+            continue
+        elegibles.append({"cod": g["cod"], "nom": g["nom"] or "Sin nombre",
+                           "n_ordenes": g["n_con_calculo"], "porcentaje": porcentaje})
+
+    if not elegibles:
+        return None, None
+
+    kpi_max = max(elegibles, key=lambda p: p["porcentaje"])
+    kpi_min = min(elegibles, key=lambda p: p["porcentaje"])
+    return kpi_max, kpi_min
+
+
 def _resumen_ordenes(ordenes, analisis):
     """
     Construye los KPIs y los datos para los gráficos del tab "Resumen" a partir
@@ -1678,21 +1737,21 @@ def _resumen_ordenes(ordenes, analisis):
 
     Devuelve un dict apto para serializar a JSON y consumir desde Chart.js:
     - total: nº de órdenes de la consulta.
-    - max / min: {op, porcentaje} de la orden con mayor / menor % (None si
-      ninguna orden tiene % calculado).
-    - promedio_ponderado: suma(valor_nota) / suma(CANT1) * 100 del conjunto.
+    - max / min: POR PRODUCTO (ver _kpis_producto_extremos), no por orden --
+      {cod, nom, n_ordenes, porcentaje} del producto con mayor/menor %
+      ponderado entre los que tienen >= MIN_ORDENES_KPI órdenes con cálculo
+      (None si ninguno alcanza el umbral).
+    - promedio_ponderado: suma(valor_nota) / suma(CANT1) * 100 del conjunto
+      (sin cambios, sigue siendo global — NO usa el umbral de MIN_ORDENES_KPI).
     - grafico_producto / grafico_tiempo: {labels, data} listos para graficar.
     """
     total = len(ordenes)
 
-    # KPIs máximo/mínimo (sobre órdenes con % calculado) y ponderado general.
-    max_kpi = None
-    min_kpi = None
+    # Ponderado general (KPI "Promedio ponderado" - global, sin umbral).
     num_total = 0.0
     den_total = 0.0
     for orden in ordenes:
         desp = orden.get("desperdicio") or {}
-        pct = desp.get("porcentaje")
         num = desp.get("num_ponderado")
         den = desp.get("den_ponderado")
         # Mismo criterio de ponderado: num = kg de desperdicio, den = base de la
@@ -1700,13 +1759,11 @@ def _resumen_ordenes(ordenes, analisis):
         if num is not None and den is not None and float(den) > 0:
             num_total += float(num)
             den_total += float(den)
-        if pct is not None:
-            if max_kpi is None or pct > max_kpi["porcentaje"]:
-                max_kpi = {"op": orden.get("op"), "porcentaje": pct}
-            if min_kpi is None or pct < min_kpi["porcentaje"]:
-                min_kpi = {"op": orden.get("op"), "porcentaje": pct}
 
     promedio = _porcentaje_ponderado(num_total, den_total)
+
+    # KPIs "más alto"/"más bajo": por producto, con el umbral MIN_ORDENES_KPI.
+    max_kpi, min_kpi = _kpis_producto_extremos(ordenes)
 
     # Gráfico por producto: reutiliza la agregación (ya ordenada desc) del tab
     # Análisis; solo se grafican los grupos con % calculable.
@@ -1896,6 +1953,7 @@ def ordenes_produccion_consultar():
         resumen=_resumen_ordenes(ordenes, analisis),
         filtro=_extraer_filtro(request.form),
         ordenes_data=_ordenes_data_json(ordenes),
+        min_ordenes_kpi=MIN_ORDENES_KPI,
     ), 200
 
 
@@ -2173,12 +2231,14 @@ def _generar_pdf(ordenes, analisis, resumen, filtro):
     kpis = [[
         kpi_cell("Órdenes encontradas", resumen.get("total", 0), "#141519",
                  f"{len(analisis.get('por_producto', []))} producto(s)"),
+        # "más alto"/"más bajo" son POR PRODUCTO (ver _kpis_producto_extremos),
+        # no por orden individual -- el sub muestra código/nombre + N órdenes.
         kpi_cell("Desperdicio más alto", f"{maxk['porcentaje']}%" if maxk else "—",
                  hex_pct(maxk["porcentaje"]) if maxk else "#5C6270",
-                 f"OP {maxk['op']}" if maxk else "sin % calculado"),
+                 f"{maxk['cod']} — {maxk['nom']} ({maxk['n_ordenes']} órdenes)" if maxk else f"sin producto con ≥{MIN_ORDENES_KPI} órdenes"),
         kpi_cell("Desperdicio más bajo", f"{mink['porcentaje']}%" if mink else "—",
                  hex_pct(mink["porcentaje"]) if mink else "#5C6270",
-                 f"OP {mink['op']}" if mink else "sin % calculado"),
+                 f"{mink['cod']} — {mink['nom']} ({mink['n_ordenes']} órdenes)" if mink else f"sin producto con ≥{MIN_ORDENES_KPI} órdenes"),
         kpi_cell("Promedio ponderado", f"{prom}%" if prom is not None else "—",
                  hex_pct(prom) if prom is not None else "#5C6270", "sobre volumen total"),
     ]]

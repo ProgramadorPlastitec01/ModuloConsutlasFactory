@@ -244,6 +244,11 @@ thead th {
     white-space: nowrap;
 }
 thead th.num, tbody td.num { text-align: right; }
+/* TH ordenables (Análisis: "Órdenes" / "% Desperdicio") — solo visual, no
+   afecta cálculo ni export. */
+thead th.th-sort { cursor: pointer; user-select: none; }
+thead th.th-sort:hover { color: var(--texto); }
+thead th.th-sort .th-arrow { display: inline-block; margin-left: 3px; color: var(--primario); font-size: 10px; }
 tbody td { padding: 12px 17px; border-bottom: 1px solid var(--borde); color: var(--texto); }
 tbody tr:last-child td { border-bottom: none; }
 tbody tr:hover { background: var(--fondo); }
